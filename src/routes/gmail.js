@@ -22,6 +22,18 @@ const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ]
 
+// ── GET /api/gmail/debug ──────────────────────────────────────
+// Temporary — shows exactly what redirect URI the server is using
+// Remove this after OAuth is confirmed working
+router.get('/debug', requireAuth, (req, res) => {
+  res.json({
+    GOOGLE_CLIENT_ID:     process.env.GOOGLE_CLIENT_ID     ? process.env.GOOGLE_CLIENT_ID.slice(0, 20) + '...' : 'NOT SET',
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? 'SET' : 'NOT SET',
+    GOOGLE_REDIRECT_URI:  process.env.GOOGLE_REDIRECT_URI  || 'NOT SET',
+    FRONTEND_URL:         process.env.FRONTEND_URL          || 'NOT SET',
+  })
+})
+
 // ── GET /api/gmail/auth-url ────────────────────────────────────
 // Frontend calls this, then redirects the user to the returned URL.
 // We encode the JWT in the state param so we know which user is
@@ -195,3 +207,95 @@ async function getGmailClientForUser(userId) {
 
 module.exports = router
 module.exports.getGmailClientForUser = getGmailClientForUser
+
+// ── Phase 2 — Scan endpoints ──────────────────────────────────
+const { scanSubscriptions, scanOrders, scanBills } = require('./gmail-parser')
+
+// POST /api/gmail/scan/subscriptions — scan Gmail and store results
+router.post('/scan/subscriptions', requireAuth, async (req, res, next) => {
+  try {
+    const result = await scanSubscriptions(req.user.id)
+    const { rows } = await pool.query(
+      "SELECT * FROM gmail_subscriptions WHERE user_id=$1 AND status='active' ORDER BY next_renewal ASC NULLS LAST",
+      [req.user.id]
+    )
+    res.json({ ...result, subscriptions: rows })
+  } catch (err) {
+    if (err.message.includes('not connected')) return res.status(400).json({ error: 'Gmail not connected' })
+    next(err)
+  }
+})
+
+// GET /api/gmail/subscriptions — fetch stored subscriptions
+router.get('/subscriptions', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM gmail_subscriptions WHERE user_id=$1 AND status='active' ORDER BY next_renewal ASC NULLS LAST",
+      [req.user.id]
+    )
+    res.json({ subscriptions: rows })
+  } catch (err) { next(err) }
+})
+
+// PATCH /api/gmail/subscriptions/:id — update status
+router.patch('/subscriptions/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { status } = req.body
+    const { rows } = await pool.query(
+      'UPDATE gmail_subscriptions SET status=$1 WHERE id=$2 AND user_id=$3 RETURNING *',
+      [status, req.params.id, req.user.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json(rows[0])
+  } catch (err) { next(err) }
+})
+
+// POST /api/gmail/scan/orders — scan Gmail and store results
+router.post('/scan/orders', requireAuth, async (req, res, next) => {
+  try {
+    const result = await scanOrders(req.user.id)
+    const { rows } = await pool.query(
+      "SELECT * FROM gmail_orders WHERE user_id=$1 AND status='active' ORDER BY order_date DESC",
+      [req.user.id]
+    )
+    res.json({ ...result, orders: rows })
+  } catch (err) {
+    if (err.message.includes('not connected')) return res.status(400).json({ error: 'Gmail not connected' })
+    next(err)
+  }
+})
+
+// GET /api/gmail/orders — fetch stored orders
+router.get('/orders', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM gmail_orders WHERE user_id=$1 AND status='active' ORDER BY order_date DESC LIMIT 30",
+      [req.user.id]
+    )
+    res.json({ orders: rows })
+  } catch (err) { next(err) }
+})
+
+// PATCH /api/gmail/orders/:id — dismiss
+router.patch('/orders/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { status } = req.body
+    const { rows } = await pool.query(
+      'UPDATE gmail_orders SET status=$1 WHERE id=$2 AND user_id=$3 RETURNING *',
+      [status, req.params.id, req.user.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json(rows[0])
+  } catch (err) { next(err) }
+})
+
+// POST /api/gmail/scan/bills — live scan, no storage
+router.post('/scan/bills', requireAuth, async (req, res, next) => {
+  try {
+    const result = await scanBills(req.user.id)
+    res.json(result)
+  } catch (err) {
+    if (err.message.includes('not connected')) return res.status(400).json({ error: 'Gmail not connected' })
+    next(err)
+  }
+})
