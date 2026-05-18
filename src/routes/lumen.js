@@ -185,7 +185,7 @@ Always respond as Lumen — use "I" to refer to yourself, reference their specif
     const client = new Anthropic({ apiKey: anthropicKey })
 
     const stream = client.messages.stream({
-      model:      'claude-sonnet-4-20250514',
+      model:      'claude-sonnet-4-6',
       max_tokens: 1024,
       system:     systemPrompt,
       messages:   [{ role: 'user', content: message }],
@@ -228,7 +228,7 @@ router.post('/insight', async (req, res, next) => {
 
     const client = new Anthropic({ apiKey: anthropicKey })
     const response = await client.messages.create({
-      model:      'claude-sonnet-4-20250514',
+      model:      'claude-sonnet-4-6',
       max_tokens: 300,
       system: `You are Lumen, a personal financial AI. Generate a single sharp insight based on the user's financial data. Be specific, use their real numbers. 2-3 sentences max. No preamble. Context: ${context_type}
 
@@ -263,7 +263,7 @@ router.post('/suggest-categories', async (req, res, next) => {
     const txNames = txs.map(t => t.name).join(', ')
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514', max_tokens: 800,
+      model: 'claude-sonnet-4-6', max_tokens: 800,
       messages: [{ role: 'user', content: `Based on these transaction names from a user's bank account, suggest 6-8 practical budget categories for a personal finance app.\n\nTransactions: ${txNames}\n\nReturn ONLY a JSON array, no markdown, no explanation:\n[{"name":"Groceries","icon":"🛒","color":"safe"},...]\n\nColor options: safe (green), calm (blue), goal (purple), warn (amber), debt (red), pink, orange, sky, lime, gold\nUse common personal finance category names (1-2 words), pick icons that match.` }],
     })
 
@@ -304,7 +304,7 @@ router.post('/categorize', async (req, res, next) => {
     const txList       = needsTag.slice(0, 120).map(tx => `${tx.id}: ${tx.name}`).join('\n')
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514', max_tokens: 2500,
+      model: 'claude-sonnet-4-6', max_tokens: 2500,
       messages: [{ role: 'user', content: `Categorize these financial transactions into the provided budget categories.\n\nBudget categories: ${categoryList}\n\nTransactions (id: merchant name):\n${txList}\n\nReturn ONLY a JSON array, no markdown:\n[{"id":123,"category":"Groceries"},...]\n\nRules:\n- Use exact category names from the list\n- Set category to null if no category fits\n- Same merchant = same category always` }],
     })
 
@@ -359,7 +359,7 @@ router.post('/budget-limits', async (req, res, next) => {
     ).join('\n')
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514', max_tokens: 1500,
+      model: 'claude-sonnet-4-6', max_tokens: 1500,
       messages: [{ role: 'user', content: `Analyze this 6-month spending history and suggest optimal monthly budget caps.\n\n${dataStr}\n\nReturn ONLY a JSON array, no markdown:\n[{"id":1,"name":"Groceries","suggested_cap":350,"reasoning":"One sentence with specific numbers."},...]\n\nRules:\n- If avg > current cap: suggest higher cap\n- If avg < current cap × 0.6: suggest lower cap\n- Round all suggested_caps to nearest $25\n- One sentence reasoning with specific numbers` }],
     })
 
