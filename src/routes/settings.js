@@ -16,6 +16,14 @@ router.get('/', async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ error: 'User not found' })
 
     const user = rows[0]
+
+    // Gmail connection status
+    const { rows: gmailRows } = await pool.query(
+      'SELECT gmail_address, connected_at, last_synced FROM gmail_tokens WHERE user_id=$1',
+      [req.user.id]
+    )
+    const gmail = gmailRows[0] || null
+
     res.json({
       id:           user.id,
       email:        user.email,
@@ -23,9 +31,14 @@ router.get('/', async (req, res, next) => {
       created_at:   user.created_at,
       has_anthropic_key: !!user.anthropic_key,
       has_google_key:    !!user.google_key,
-      // Masked — show last 4 chars only
       anthropic_key_hint: user.anthropic_key ? `...${user.anthropic_key.slice(-4)}` : null,
       google_key_hint:    user.google_key    ? `...${user.google_key.slice(-4)}`    : null,
+      gmail: gmail ? {
+        connected:     true,
+        gmail_address: gmail.gmail_address,
+        connected_at:  gmail.connected_at,
+        last_synced:   gmail.last_synced,
+      } : { connected: false },
     })
   } catch (err) {
     next(err)
