@@ -38,3 +38,38 @@ router.get('/', async (req, res, next) => {
 })
 
 module.exports = router
+
+// POST /api/calendar — add a recurring item
+router.post('/', async (req, res, next) => {
+  try {
+    const { name, amount, day_of_month, type, icon } = req.body
+    if (!name || !amount || !day_of_month || !type) {
+      return res.status(400).json({ error: 'name, amount, day_of_month, and type are required' })
+    }
+    if (day_of_month < 1 || day_of_month > 31) {
+      return res.status(400).json({ error: 'day_of_month must be between 1 and 31' })
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO recurring (user_id, name, amount, day_of_month, type, icon, active)
+       VALUES ($1,$2,$3,$4,$5,$6,TRUE) RETURNING *`,
+      [req.user.id, name, amount, day_of_month, type, icon || null]
+    )
+    res.status(201).json(rows[0])
+  } catch (err) {
+    next(err)
+  }
+})
+
+// DELETE /api/calendar/:id — remove a recurring item
+router.delete('/:id', async (req, res, next) => {
+  try {
+    await pool.query(
+      'DELETE FROM recurring WHERE id=$1 AND user_id=$2',
+      [req.params.id, req.user.id]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    next(err)
+  }
+})
