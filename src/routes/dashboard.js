@@ -64,6 +64,14 @@ router.get('/', async (req, res, next) => {
       [uid]
     )
 
+    // Active pinned plans — subtract their amounts from free-to-spend
+    const { rows: activePlans } = await pool.query(
+      `SELECT * FROM plans WHERE user_id=$1 AND status='active' ORDER BY created_at DESC`,
+      [uid]
+    )
+    const plannedSpend = activePlans.reduce((s, p) => s + Number(p.amount || 0), 0)
+    const balanceAfterPlans = balanceAfterBills - plannedSpend
+
     // Pressure = bills remaining vs (balance + incoming pay)
     const totalAvailable = balance + upcomingPayTotal
     const pressureScore  = totalAvailable > 0
@@ -78,11 +86,13 @@ router.get('/', async (req, res, next) => {
     const nextPaycheck  = remainingIncome[0] || null
 
     res.json({
-      balance, balanceAfterBills, committedBills, upcomingPayTotal,
+      balance, balanceAfterBills, balanceAfterPlans, committedBills, upcomingPayTotal,
       pressureScore, pressureLabel,
       monthSpent:  Number(monthSpend[0].spent),
       monthIncome: Number(monthSpend[0].income),
       upcomingBills, nextPaycheck,
+      activePlans,
+      plannedSpend,
     })
   } catch (err) {
     next(err)
