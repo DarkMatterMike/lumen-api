@@ -24,13 +24,16 @@ router.get('/', async (req, res, next) => {
       [uid, todayDay]
     )
 
-    const committedBills    = recurring.reduce((s, r) => s + Number(r.amount), 0)
-    const balanceAfterBills = balance - committedBills
-
-    const { rows: nextPay } = await pool.query(
-      "SELECT * FROM recurring WHERE user_id=$1 AND active=TRUE AND type='income' AND day_of_month>=$2 ORDER BY day_of_month ASC LIMIT 1",
+    const { rows: upcomingIncome } = await pool.query(
+      "SELECT * FROM recurring WHERE user_id=$1 AND active=TRUE AND type='income' AND day_of_month>=$2 ORDER BY day_of_month ASC",
       [uid, todayDay]
     )
+
+    const committedBills   = recurring.reduce((s, r) => s + Number(r.amount), 0)
+    const upcomingPayTotal = upcomingIncome.reduce((s, r) => s + Number(r.amount), 0)
+    const balanceAfterBills = balance - committedBills + upcomingPayTotal
+
+    const nextPay = upcomingIncome.slice(0, 1)
 
     const { rows: monthSpend } = await pool.query(
       `SELECT
@@ -43,8 +46,10 @@ router.get('/', async (req, res, next) => {
       [uid]
     )
 
-    const pressureScore = balance > 0
-      ? Math.min(100, Math.round((committedBills / balance) * 100))
+    // Pressure = how much of (balance + upcoming income) is consumed by bills
+    const totalAvailable = balance + upcomingPayTotal
+    const pressureScore = totalAvailable > 0
+      ? Math.min(100, Math.round((committedBills / totalAvailable) * 100))
       : 100
     const pressureLabel =
       pressureScore < 25 ? 'SAFE' :
@@ -62,7 +67,7 @@ router.get('/', async (req, res, next) => {
     })() : null
 
     res.json({
-      balance, balanceAfterBills, committedBills,
+      balance, balanceAfterBills, committedBills, upcomingPayTotal,
       pressureScore, pressureLabel,
       monthSpent:  Number(monthSpend[0].spent),
       monthIncome: Number(monthSpend[0].income),
