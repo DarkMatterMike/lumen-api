@@ -36,7 +36,9 @@ router.get('/', async (req, res, next) => {
          COALESCE(SUM(CASE WHEN amount<0 THEN ABS(amount) ELSE 0 END),0) AS spent,
          COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0) AS income
        FROM transactions
-       WHERE user_id=$1 AND date>=date_trunc('month',CURRENT_DATE)`,
+       WHERE user_id=$1
+         AND date>=date_trunc('month',CURRENT_DATE)
+         AND COALESCE(tx_type,'expense') != 'transfer'`,
       [uid]
     )
 
