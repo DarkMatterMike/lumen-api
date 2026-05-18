@@ -117,6 +117,7 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
   let added = 0
   let nextCursor = cursor
   let hasMore = true
+  const newTxIds = []  // track IDs for Gmail enrichment
 
   while (hasMore) {
     const response = await plaidClient.transactionsSync({
@@ -138,14 +139,18 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
       const amount = -tx.amount // Plaid: positive = debit, we store negative = expense
       const category = tx.personal_finance_category?.primary || tx.category?.[0] || 'Other'
 
-      await pool.query(
+      const { rows: inserted } = await pool.query(
         `INSERT INTO transactions
            (user_id, account_id, plaid_transaction_id, name, amount, category, icon, date)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (plaid_transaction_id) DO NOTHING`,
+         ON CONFLICT (plaid_transaction_id) DO NOTHING
+         RETURNING id`,
         [userId, accountId, tx.transaction_id, tx.name, amount, category, null, tx.date]
       )
-      added++
+      if (inserted.length) {
+        newTxIds.push(inserted[0].id)
+        added++
+      }
     }
 
     // Update modified
@@ -175,6 +180,14 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
     'UPDATE plaid_items SET cursor=$1, last_synced=NOW() WHERE id=$2',
     [nextCursor, plaidItemId]
   )
+
+  // Phase 3 — enrich new transactions with Gmail receipt data (fire and forget)
+  if (newTxIds.length) {
+    const { enrichNewTransactions } = require('./gmail-parser')
+    enrichNewTransactions(userId, newTxIds).catch(e =>
+      console.warn('[Gmail enrichment]', e.message)
+    )
+  }
 
   return added
 }

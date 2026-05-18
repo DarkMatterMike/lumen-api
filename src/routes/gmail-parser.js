@@ -462,9 +462,273 @@ async function syncGmailForUser(userId) {
   }
 }
 
+// ── PHASE 3: Transaction Enrichment ──────────────────────────
+/**
+ * Given a transaction name and date, search Gmail for a matching receipt
+ * and return enriched data: cleaner name, category hint, order details.
+ *
+ * Called after Plaid sync for each new transaction.
+ */
+async function enrichTransaction(userId, txName, txDate, amount) {
+  try {
+    const auth  = await getGmailClientForUser(userId)
+    const gmail = google.gmail({ version: 'v1', auth })
+
+    // Build merchant keyword from transaction name
+    // Strip common Plaid noise: "SQ *", "TST*", store numbers, locations
+    const merchantRaw = txName
+      .replace(/^(SQ\s*\*|TST\*|SP\s+|PP\*|AUT\s+|APL\*|WAL-|PAYPAL\s*\*)/i, '')
+      .replace(/\s*#\d+\s*$/,  '')    // trailing store number
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)                    // first 2 words are usually the merchant
+      .join(' ')
+
+    if (!merchantRaw || merchantRaw.length < 3) return null
+
+    // Search window: ±2 days of the transaction date
+    const txDay   = new Date(txDate)
+    const before  = new Date(txDay); before.setDate(before.getDate() + 3)
+    const after   = new Date(txDay); after.setDate(after.getDate()  - 3)
+    const bStr    = `${before.getFullYear()}/${before.getMonth()+1}/${before.getDate()}`
+    const aStr    = `${after.getFullYear()}/${after.getMonth()+1}/${after.getDate()}`
+
+    const query = `"${merchantRaw}" (receipt OR order OR confirmation OR purchase) after:${aStr} before:${bStr}`
+
+    const messages = await searchMessages(gmail, query, 5)
+    if (!messages.length) return null
+
+    // Take the first matching message
+    const msg     = await getMessage(gmail, messages[0].id)
+    const subject = header(msg, 'subject')
+    const from    = header(msg, 'from')
+    const body    = extractBody(msg.payload).slice(0, 1000)
+
+    // Try to extract a cleaner merchant name from the email
+    const cleanName = extractCleanMerchantName(from, subject, merchantRaw)
+
+    // Try to get a category hint from the email content
+    const categoryHint = extractCategoryHint(from, subject, body)
+
+    // Try to extract the exact amount to verify it's the right receipt
+    const emailAmount = extractAmount(body) || extractAmount(subject)
+    const amountMatch = emailAmount && Math.abs(emailAmount - Math.abs(amount)) < 2
+
+    return {
+      cleanName:    cleanName || null,
+      categoryHint: categoryHint || null,
+      emailSubject: subject,
+      sender:       from,
+      amountMatch,
+      confidence:   amountMatch ? 'high' : 'medium',
+    }
+  } catch (err) {
+    // Gmail not connected or query failed — silent fallback
+    return null
+  }
+}
+
+function extractCleanMerchantName(from, subject, fallback) {
+  // e.g. "Your Blue Bottle Coffee receipt" → "Blue Bottle Coffee"
+  const patterns = [
+    /your\s+(.+?)\s+(?:receipt|order|purchase|confirmation)/i,
+    /(?:receipt|order)\s+from\s+(.+?)(?:\s+[-–]|\s+#|\s+\(|$)/i,
+    /thank you for (?:your order|shopping) (?:at|with)\s+(.+?)(?:\s+[-–]|!|\.|\s*$)/i,
+  ]
+  for (const p of patterns) {
+    const m = subject.match(p)
+    if (m && m[1].length > 2 && m[1].length < 40) return m[1].trim()
+  }
+  return fallback
+}
+
+// Map email signals to budget category names
+const CATEGORY_SIGNALS = {
+  'Groceries':     ['grocery', 'supermarket', 'whole foods', 'trader joe', 'kroger', 'safeway', 'aldi', 'wegmans'],
+  'Dining':        ['restaurant', 'cafe', 'coffee', 'pizza', 'doordash', 'grubhub', 'uber eats', 'instacart', 'food delivery'],
+  'Transport':     ['uber', 'lyft', 'transit', 'parking', 'gas station', 'fuel', 'amtrak', 'airline', 'flight'],
+  'Shopping':      ['amazon', 'ebay', 'etsy', 'target', 'walmart', 'best buy', 'order confirmation', 'purchase confirmation'],
+  'Subscriptions': ['subscription', 'membership', 'renewal', 'netflix', 'spotify', 'hulu', 'adobe', 'apple'],
+  'Health':        ['pharmacy', 'cvs', 'walgreens', 'doctor', 'medical', 'dental', 'vision', 'prescription'],
+  'Entertainment': ['ticketmaster', 'eventbrite', 'cinema', 'movies', 'concert', 'ticket'],
+  'Travel':        ['hotel', 'airbnb', 'vrbo', 'booking.com', 'expedia', 'car rental', 'hertz', 'avis'],
+}
+
+function extractCategoryHint(from, subject, body) {
+  const text = `${from} ${subject} ${body}`.toLowerCase()
+  for (const [category, signals] of Object.entries(CATEGORY_SIGNALS)) {
+    if (signals.some(s => text.includes(s))) return category
+  }
+  return null
+}
+
+/**
+ * Enrich a batch of new transactions after Plaid sync.
+ * Runs in parallel with a concurrency cap to avoid Gmail rate limits.
+ * Only enriches expense transactions that have a generic-looking name.
+ */
+async function enrichNewTransactions(userId, transactionIds) {
+  if (!transactionIds.length) return 0
+
+  // Check Gmail is connected
+  const { rows: gmailRows } = await pool.query(
+    'SELECT id FROM gmail_tokens WHERE user_id=$1', [userId]
+  )
+  if (!gmailRows.length) return 0
+
+  const { rows: txs } = await pool.query(
+    `SELECT id, name, amount, date FROM transactions
+     WHERE id = ANY($1) AND user_id=$2 AND amount < 0`,
+    [transactionIds, userId]
+  )
+
+  let enriched = 0
+  // Process up to 5 at a time to respect Gmail API rate limits
+  for (let i = 0; i < txs.length; i += 5) {
+    const batch = txs.slice(i, i + 5)
+    await Promise.all(batch.map(async (tx) => {
+      try {
+        const result = await enrichTransaction(userId, tx.name, tx.date, tx.amount)
+        if (!result) return
+
+        const updates = []
+        const values  = []
+        let idx = 1
+
+        // Only update name if we found a cleaner version and confidence is high
+        if (result.cleanName && result.confidence === 'high' && result.cleanName !== tx.name) {
+          updates.push(`name=$${idx++}`)
+          values.push(result.cleanName)
+        }
+
+        // Only set category hint if transaction has no budget category assigned yet
+        if (result.categoryHint) {
+          updates.push(`category=COALESCE(NULLIF(category,'Other'), $${idx++})`)
+          values.push(result.categoryHint)
+        }
+
+        if (!updates.length) return
+
+        values.push(tx.id)
+        values.push(userId)
+        await pool.query(
+          `UPDATE transactions SET ${updates.join(', ')} WHERE id=$${idx} AND user_id=$${idx+1}`,
+          values
+        )
+        enriched++
+      } catch (err) {
+        console.warn(`[Enrichment] tx ${tx.id}:`, err.message)
+      }
+    }))
+    // Small delay between batches to stay under Gmail quota
+    if (i + 5 < txs.length) await new Promise(r => setTimeout(r, 500))
+  }
+
+  return enriched
+}
+
+// ── PHASE 4: Gmail Context Builder ───────────────────────────
+/**
+ * Build a Gmail intelligence summary for injection into Lumen's AI context.
+ * Called by buildFinancialContext in lumen.js.
+ */
+async function buildGmailContext(userId) {
+  try {
+    // Check connected
+    const { rows: gmailRows } = await pool.query(
+      'SELECT id FROM gmail_tokens WHERE user_id=$1', [userId]
+    )
+    if (!gmailRows.length) return null
+
+    // Active subscriptions
+    const { rows: subs } = await pool.query(
+      `SELECT service_name, amount, billing_cycle, next_renewal, icon
+       FROM gmail_subscriptions
+       WHERE user_id=$1 AND status='active'
+       ORDER BY next_renewal ASC NULLS LAST
+       LIMIT 10`,
+      [userId]
+    )
+
+    // Recent orders (last 30 days)
+    const { rows: orders } = await pool.query(
+      `SELECT merchant, amount, order_date, estimated_delivery, icon
+       FROM gmail_orders
+       WHERE user_id=$1 AND status='active'
+         AND order_date >= CURRENT_DATE - INTERVAL '30 days'
+       ORDER BY order_date DESC
+       LIMIT 8`,
+      [userId]
+    )
+
+    if (!subs.length && !orders.length) return null
+
+    const today = new Date()
+
+    // Subscriptions section
+    const subLines = subs.map(s => {
+      const days    = s.next_renewal
+        ? Math.ceil((new Date(s.next_renewal) - today) / 86400000)
+        : null
+      const renewal = days !== null
+        ? (days <= 0 ? 'renews today/recently' : `renews in ${days} days`)
+        : 'renewal date unknown'
+      const cost = s.amount
+        ? `$${Number(s.amount).toFixed(2)}/${s.billing_cycle || 'mo'}`
+        : 'amount unknown'
+      return `  - ${s.icon} ${s.service_name}: ${cost}, ${renewal}`
+    })
+
+    // Monthly sub cost
+    const monthlySubCost = subs.reduce((sum, s) => {
+      if (!s.amount) return sum
+      return sum + (s.billing_cycle === 'annual' ? Number(s.amount) / 12 : Number(s.amount))
+    }, 0)
+
+    // Orders section
+    const orderLines = orders.map(o => {
+      const delivery = o.estimated_delivery ? `, arriving ${o.estimated_delivery}` : ''
+      const cost     = o.amount ? ` — $${Number(o.amount).toFixed(2)}` : ''
+      return `  - ${o.icon} ${o.merchant}${cost} on ${new Date(o.order_date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}${delivery}`
+    })
+
+    // Upcoming renewals in next 7 days (urgent)
+    const urgentRenewals = subs.filter(s => {
+      if (!s.next_renewal) return false
+      const days = Math.ceil((new Date(s.next_renewal) - today) / 86400000)
+      return days >= 0 && days <= 7
+    })
+
+    let context = '\nGMAIL INTELLIGENCE\n'
+
+    if (subs.length) {
+      context += `\nACTIVE SUBSCRIPTIONS (${subs.length} detected, ~$${monthlySubCost.toFixed(2)}/mo combined)\n`
+      context += subLines.join('\n')
+    }
+
+    if (urgentRenewals.length) {
+      context += `\n\n⚠️ RENEWING IN NEXT 7 DAYS\n`
+      context += urgentRenewals.map(s => `  - ${s.service_name} on ${new Date(s.next_renewal).toLocaleDateString('en-US',{month:'short',day:'numeric'})}`).join('\n')
+    }
+
+    if (orders.length) {
+      context += `\n\nRECENT ORDERS (last 30 days)\n`
+      context += orderLines.join('\n')
+    }
+
+    return context
+  } catch (err) {
+    console.warn('[buildGmailContext]', err.message)
+    return null
+  }
+}
+
 module.exports = {
   scanSubscriptions,
   scanOrders,
   scanBills,
   syncGmailForUser,
+  enrichNewTransactions,
+  buildGmailContext,
 }

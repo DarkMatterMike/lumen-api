@@ -3,6 +3,13 @@ const router      = express.Router()
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 const Anthropic   = require('@anthropic-ai/sdk')
+// Lazy-load gmail-parser to avoid circular require at startup
+function getGmailContext(userId) {
+  try {
+    const { buildGmailContext } = require('./gmail-parser')
+    return buildGmailContext(userId)
+  } catch { return Promise.resolve(null) }
+}
 
 router.use(requireAuth)
 
@@ -114,7 +121,7 @@ async function buildFinancialContext(userId) {
   const daysLeft    = daysInMonth - todayDay
 
   // Build the context string
-  return `
+  const base = `
 === LUMEN FINANCIAL SNAPSHOT — ${today.toDateString()} ===
 
 CURRENT POSITION
@@ -162,6 +169,12 @@ ${recentTx.map(t => `- ${new Date(t.date).toLocaleDateString('en-US',{month:'sho
 PINNED PLANS (user's stated spending intentions)
 ${activePlans.length > 0 ? activePlans.map(p => `- "${p.question}"${p.amount ? ` (~$${p.amount})` : ''} — pinned on ${new Date(p.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}`).join('\n') : '- No active plans'}
 `.trim()
+
+  // Phase 4 — append Gmail intelligence if connected
+  const gmailCtx = await getGmailContext(userId)
+  if (gmailCtx) base += '\n' + gmailCtx
+
+  return base
 }
 
 // POST /api/lumen/ask — streaming AI response
@@ -398,5 +411,34 @@ router.post('/budget-limits', async (req, res, next) => {
     } catch { suggestions = [] }
 
     res.json({ suggestions, spendingData })
+  } catch (err) { next(err) }
+})
+
+// POST /api/lumen/enrich — manually trigger Gmail receipt enrichment
+// Enriches the last 90 days of expense transactions
+router.post('/enrich', async (req, res, next) => {
+  try {
+    const uid = req.user.id
+
+    // Check Gmail connected
+    const { rows: gmailRows } = await pool.query(
+      'SELECT id FROM gmail_tokens WHERE user_id=$1', [uid]
+    )
+    if (!gmailRows.length) {
+      return res.status(400).json({ error: 'Gmail not connected' })
+    }
+
+    const { rows: txs } = await pool.query(
+      `SELECT id FROM transactions
+       WHERE user_id=$1 AND amount < 0
+         AND date >= CURRENT_DATE - INTERVAL '90 days'
+       ORDER BY date DESC LIMIT 50`,
+      [uid]
+    )
+
+    const { enrichNewTransactions } = require('./gmail-parser')
+    const enriched = await enrichNewTransactions(uid, txs.map(t => t.id))
+
+    res.json({ enriched, total: txs.length })
   } catch (err) { next(err) }
 })
