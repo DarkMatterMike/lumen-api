@@ -73,3 +73,34 @@ router.delete('/:id', async (req, res, next) => {
     next(err)
   }
 })
+
+// PATCH /api/calendar/:id — edit a recurring item
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const { name, amount, day_of_month, type, icon, active } = req.body
+    const updates = []
+    const values  = []
+    let idx = 1
+
+    if (name         !== undefined) { updates.push(`name=$${idx++}`);         values.push(name) }
+    if (amount       !== undefined) { updates.push(`amount=$${idx++}`);       values.push(amount) }
+    if (day_of_month !== undefined) { updates.push(`day_of_month=$${idx++}`); values.push(day_of_month) }
+    if (type         !== undefined) { updates.push(`type=$${idx++}`);         values.push(type) }
+    if (icon         !== undefined) { updates.push(`icon=$${idx++}`);         values.push(icon) }
+    if (active       !== undefined) { updates.push(`active=$${idx++}`);       values.push(active) }
+
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
+
+    values.push(req.params.id)
+    values.push(req.user.id)
+
+    const { rows } = await pool.query(
+      `UPDATE recurring SET ${updates.join(', ')} WHERE id=$${idx} AND user_id=$${idx + 1} RETURNING *`,
+      values
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Item not found' })
+    res.json(rows[0])
+  } catch (err) {
+    next(err)
+  }
+})
