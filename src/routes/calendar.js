@@ -2,38 +2,9 @@ const express     = require('express')
 const router      = express.Router()
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
+const { getOccurrencesForMonth } = require('../db/recurringUtils')
 
 router.use(requireAuth)
-
-// Given a recurring item, return all occurrence dates for a given year/month
-function getOccurrencesForMonth(r, year, month) {
-  if (r.frequency === 'biweekly' && r.start_date) {
-    // Walk forward from start_date in 14-day steps, collect dates in this month
-    const start    = new Date(r.start_date)
-    start.setHours(0, 0, 0, 0)
-    const monthStart = new Date(year, month, 1)
-    const monthEnd   = new Date(year, month + 1, 0)
-    const dates = []
-
-    // Find the first occurrence on or after monthStart
-    let cur = new Date(start)
-    // Step forward until we reach the month window
-    while (cur < monthStart) cur = new Date(cur.getTime() + 14 * 86400000)
-    // Step back in case we overshot
-    while (cur >= monthStart) cur = new Date(cur.getTime() - 14 * 86400000)
-    cur = new Date(cur.getTime() + 14 * 86400000)
-
-    while (cur <= monthEnd) {
-      if (cur >= monthStart) dates.push(new Date(cur))
-      cur = new Date(cur.getTime() + 14 * 86400000)
-    }
-    return dates
-  }
-  // Monthly — single occurrence on day_of_month
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-  const day = Math.min(r.day_of_month, daysInMonth)
-  return [new Date(year, month, day)]
-}
 
 router.get('/', async (req, res, next) => {
   try {

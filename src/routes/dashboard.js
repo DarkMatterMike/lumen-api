@@ -1,7 +1,8 @@
-const express     = require('express')
-const router      = express.Router()
-const pool        = require('../db/pool')
-const requireAuth = require('../middleware/requireAuth')
+const express      = require('express')
+const router       = express.Router()
+const pool         = require('../db/pool')
+const requireAuth  = require('../middleware/requireAuth')
+const { getOccurrencesForMonth } = require('../db/recurringUtils')
 
 router.use(requireAuth)
 
@@ -17,23 +18,40 @@ router.get('/', async (req, res, next) => {
     const balance = Number(balanceRows[0].balance)
 
     const today    = new Date()
+    today.setHours(0, 0, 0, 0)
     const todayDay = today.getDate()
+    const year     = today.getFullYear()
+    const month    = today.getMonth()
 
-    const { rows: recurring } = await pool.query(
-      "SELECT * FROM recurring WHERE user_id=$1 AND active=TRUE AND type!='income' AND day_of_month>=$2 ORDER BY day_of_month ASC",
-      [uid, todayDay]
+    // Get all active recurring items
+    const { rows: allRecurring } = await pool.query(
+      'SELECT * FROM recurring WHERE user_id=$1 AND active=TRUE',
+      [uid]
     )
 
-    const { rows: upcomingIncome } = await pool.query(
-      "SELECT * FROM recurring WHERE user_id=$1 AND active=TRUE AND type='income' AND day_of_month>=$2 ORDER BY day_of_month ASC",
-      [uid, todayDay]
-    )
+    // Expand occurrences for this month, filter to on/after today
+    const remainingExpenses = []
+    const remainingIncome   = []
 
-    const committedBills   = recurring.reduce((s, r) => s + Number(r.amount), 0)
-    const upcomingPayTotal = upcomingIncome.reduce((s, r) => s + Number(r.amount), 0)
+    for (const r of allRecurring) {
+      const dates = getOccurrencesForMonth(r, year, month)
+      for (const d of dates) {
+        if (d.getDate() >= todayDay) {
+          if (r.type === 'income') {
+            remainingIncome.push({ ...r, day_of_month: d.getDate(), daysUntil: Math.max(0, Math.ceil((d - today) / 86400000)) })
+          } else {
+            remainingExpenses.push({ ...r, day_of_month: d.getDate(), daysUntil: Math.max(0, Math.ceil((d - today) / 86400000)) })
+          }
+        }
+      }
+    }
+
+    remainingExpenses.sort((a, b) => a.day_of_month - b.day_of_month)
+    remainingIncome.sort((a, b) => a.day_of_month - b.day_of_month)
+
+    const committedBills    = remainingExpenses.reduce((s, r) => s + Number(r.amount), 0)
+    const upcomingPayTotal  = remainingIncome.reduce((s, r) => s + Number(r.amount), 0)
     const balanceAfterBills = balance - committedBills + upcomingPayTotal
-
-    const nextPay = upcomingIncome.slice(0, 1)
 
     const { rows: monthSpend } = await pool.query(
       `SELECT
@@ -46,9 +64,9 @@ router.get('/', async (req, res, next) => {
       [uid]
     )
 
-    // Pressure = how much of (balance + upcoming income) is consumed by bills
+    // Pressure = bills remaining vs (balance + incoming pay)
     const totalAvailable = balance + upcomingPayTotal
-    const pressureScore = totalAvailable > 0
+    const pressureScore  = totalAvailable > 0
       ? Math.min(100, Math.round((committedBills / totalAvailable) * 100))
       : 100
     const pressureLabel =
@@ -56,22 +74,15 @@ router.get('/', async (req, res, next) => {
       pressureScore < 50 ? 'WATCH' :
       pressureScore < 75 ? 'TIGHT' : 'CRITICAL'
 
-    const upcomingBills = recurring.slice(0, 5).map(r => {
-      const d = new Date(today.getFullYear(), today.getMonth(), r.day_of_month)
-      return { ...r, daysUntil: Math.max(0, Math.ceil((d - today) / 86400000)) }
-    })
-
-    const nextPayData = nextPay.length ? (() => {
-      const d = new Date(today.getFullYear(), today.getMonth(), nextPay[0].day_of_month)
-      return { ...nextPay[0], daysUntil: Math.max(0, Math.ceil((d - today) / 86400000)) }
-    })() : null
+    const upcomingBills = remainingExpenses.slice(0, 5)
+    const nextPaycheck  = remainingIncome[0] || null
 
     res.json({
       balance, balanceAfterBills, committedBills, upcomingPayTotal,
       pressureScore, pressureLabel,
       monthSpent:  Number(monthSpend[0].spent),
       monthIncome: Number(monthSpend[0].income),
-      upcomingBills, nextPaycheck: nextPayData,
+      upcomingBills, nextPaycheck,
     })
   } catch (err) {
     next(err)
