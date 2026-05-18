@@ -15,6 +15,7 @@ const plaidRoutes        = require('./routes/plaid')
 const settingsRoutes     = require('./routes/settings')
 const lumenRoutes        = require('./routes/lumen')
 const rulesRoutes        = require('./routes/rules')
+const plansRoutes        = require('./routes/plans')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -43,6 +44,7 @@ app.use('/api/analytics',    analyticsRoutes)
 app.use('/api/settings',     settingsRoutes)
 app.use('/api/lumen',        lumenRoutes)
 app.use('/api/rules',        rulesRoutes)
+app.use('/api/plans',        plansRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })

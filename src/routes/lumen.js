@@ -78,6 +78,12 @@ async function buildFinancialContext(userId) {
     [uid]
   )
 
+  // Active pinned plans
+  const { rows: activePlans } = await pool.query(
+    "SELECT question, response, amount, created_at FROM plans WHERE user_id=$1 AND status='active' ORDER BY created_at DESC",
+    [uid]
+  )
+
   // 3-month averages
   const { rows: avgData } = await pool.query(
     `SELECT
@@ -152,6 +158,9 @@ ${recentTx.map(t => `- ${new Date(t.date).toLocaleDateString('en-US',{month:'sho
 - Avg monthly spend: $${avgMonthlySpend.toLocaleString()}
 - Avg monthly income: $${avgMonthlyIncome.toLocaleString()}
 - Savings rate: ${savingsRate}%
+
+PINNED PLANS (user's stated spending intentions)
+${activePlans.length > 0 ? activePlans.map(p => `- "${p.question}"${p.amount ? ` (~$${p.amount})` : ''} — pinned on ${new Date(p.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}`).join('\n') : '- No active plans'}
 `.trim()
 }
 
