@@ -5,6 +5,7 @@ const requireAuth = require('../middleware/requireAuth')
 
 router.use(requireAuth)
 
+// GET /api/budgets
 router.get('/', async (req, res, next) => {
   try {
     const uid = req.user.id
@@ -34,6 +35,41 @@ router.get('/', async (req, res, next) => {
     const totalSpent    = budgetsWithSpend.reduce((s, b) => s + b.spent, 0)
 
     res.json({ budgets: budgetsWithSpend, totalBudgeted, totalSpent })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/budgets — create a new budget category
+router.post('/', async (req, res, next) => {
+  try {
+    const uid = req.user.id
+    const { name, cap, icon, color, period } = req.body
+
+    if (!name || !cap) {
+      return res.status(400).json({ error: 'Name and cap are required' })
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO budgets (user_id, name, cap, icon, color, period)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [uid, name, cap, icon || '📦', color || 'safe', period || 'monthly']
+    )
+
+    res.status(201).json(rows[0])
+  } catch (err) {
+    next(err)
+  }
+})
+
+// DELETE /api/budgets/:id
+router.delete('/:id', async (req, res, next) => {
+  try {
+    await pool.query(
+      'DELETE FROM budgets WHERE id=$1 AND user_id=$2',
+      [req.params.id, req.user.id]
+    )
+    res.json({ success: true })
   } catch (err) {
     next(err)
   }
