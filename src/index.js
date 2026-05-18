@@ -11,6 +11,7 @@ const budgetsRoutes      = require('./routes/budgets')
 const calendarRoutes     = require('./routes/calendar')
 const analyticsRoutes    = require('./routes/analytics')
 const plaidRoutes        = require('./routes/plaid')
+const settingsRoutes     = require('./routes/settings')
 
 const app = express()
 
@@ -33,6 +34,7 @@ app.use('/api/transactions', transactionsRoutes)
 app.use('/api/budgets',      budgetsRoutes)
 app.use('/api/calendar',     calendarRoutes)
 app.use('/api/analytics',    analyticsRoutes)
+app.use('/api/settings',     settingsRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })
