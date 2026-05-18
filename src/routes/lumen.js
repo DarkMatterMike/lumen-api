@@ -244,3 +244,131 @@ ${financialContext}`,
 })
 
 module.exports = router
+
+// POST /api/lumen/suggest-categories
+router.post('/suggest-categories', async (req, res, next) => {
+  try {
+    const uid = req.user.id
+    const { rows: keyRow } = await pool.query('SELECT anthropic_key FROM users WHERE id=$1', [uid])
+    const anthropicKey = keyRow[0]?.anthropic_key
+    if (!anthropicKey) return res.status(402).json({ error: 'NO_KEY' })
+
+    const { rows: txs } = await pool.query(
+      `SELECT DISTINCT name FROM transactions WHERE user_id=$1 AND amount < 0 ORDER BY name LIMIT 120`,
+      [uid]
+    )
+    if (!txs.length) return res.json({ categories: [] })
+
+    const client  = new Anthropic({ apiKey: anthropicKey })
+    const txNames = txs.map(t => t.name).join(', ')
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514', max_tokens: 800,
+      messages: [{ role: 'user', content: `Based on these transaction names from a user's bank account, suggest 6-8 practical budget categories for a personal finance app.\n\nTransactions: ${txNames}\n\nReturn ONLY a JSON array, no markdown, no explanation:\n[{"name":"Groceries","icon":"🛒","color":"safe"},...]\n\nColor options: safe (green), calm (blue), goal (purple), warn (amber), debt (red), pink, orange, sky, lime, gold\nUse common personal finance category names (1-2 words), pick icons that match.` }],
+    })
+
+    let categories = []
+    try {
+      const text = response.content[0].text.trim().replace(/```json\n?|\n?```/g, '').trim()
+      categories = JSON.parse(text)
+    } catch { categories = [] }
+
+    res.json({ categories })
+  } catch (err) { next(err) }
+})
+
+// POST /api/lumen/categorize
+router.post('/categorize', async (req, res, next) => {
+  try {
+    const uid = req.user.id
+    const { rows: keyRow } = await pool.query('SELECT anthropic_key FROM users WHERE id=$1', [uid])
+    const anthropicKey = keyRow[0]?.anthropic_key
+    if (!anthropicKey) return res.status(402).json({ error: 'NO_KEY' })
+
+    const { rows: budgets } = await pool.query('SELECT id, name, icon FROM budgets WHERE user_id=$1 ORDER BY name', [uid])
+    if (!budgets.length) return res.status(400).json({ error: 'NO_BUDGETS' })
+
+    const budgetNames = budgets.map(b => b.name.toLowerCase())
+    const { rows: allTxs } = await pool.query(
+      `SELECT id, name, category FROM transactions
+       WHERE user_id=$1 AND amount < 0 AND COALESCE(tx_type,'expense') != 'transfer'
+         AND date >= CURRENT_DATE - INTERVAL '3 months'
+       ORDER BY date DESC LIMIT 200`,
+      [uid]
+    )
+    const needsTag = allTxs.filter(tx => !budgetNames.includes((tx.category || '').toLowerCase()))
+    if (!needsTag.length) return res.json({ updated: 0, total: 0 })
+
+    const client       = new Anthropic({ apiKey: anthropicKey })
+    const categoryList = budgets.map(b => `${b.icon} ${b.name}`).join(' | ')
+    const txList       = needsTag.slice(0, 120).map(tx => `${tx.id}: ${tx.name}`).join('\n')
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514', max_tokens: 2500,
+      messages: [{ role: 'user', content: `Categorize these financial transactions into the provided budget categories.\n\nBudget categories: ${categoryList}\n\nTransactions (id: merchant name):\n${txList}\n\nReturn ONLY a JSON array, no markdown:\n[{"id":123,"category":"Groceries"},...]\n\nRules:\n- Use exact category names from the list\n- Set category to null if no category fits\n- Same merchant = same category always` }],
+    })
+
+    let mappings = []
+    try {
+      const text = response.content[0].text.trim().replace(/```json\n?|\n?```/g, '').trim()
+      mappings = JSON.parse(text)
+    } catch { return res.status(500).json({ error: 'AI returned an invalid response. Please try again.' }) }
+
+    let updated = 0
+    for (const { id, category } of mappings) {
+      if (!category) continue
+      const match = budgets.find(b => b.name.toLowerCase() === category.toLowerCase())
+      if (!match) continue
+      await pool.query('UPDATE transactions SET category=$1 WHERE id=$2 AND user_id=$3', [match.name, id, uid])
+      updated++
+    }
+
+    res.json({ updated, total: needsTag.length })
+  } catch (err) { next(err) }
+})
+
+// POST /api/lumen/budget-limits
+router.post('/budget-limits', async (req, res, next) => {
+  try {
+    const uid = req.user.id
+    const { rows: keyRow } = await pool.query('SELECT anthropic_key FROM users WHERE id=$1', [uid])
+    const anthropicKey = keyRow[0]?.anthropic_key
+    if (!anthropicKey) return res.status(402).json({ error: 'NO_KEY' })
+
+    const { rows: budgets } = await pool.query('SELECT * FROM budgets WHERE user_id=$1', [uid])
+    if (!budgets.length) return res.status(400).json({ error: 'No budget categories found.' })
+
+    const spendingData = await Promise.all(budgets.map(async (b) => {
+      const { rows } = await pool.query(
+        `SELECT date_trunc('month', date) AS month, COALESCE(SUM(ABS(amount)), 0) AS spent
+         FROM transactions
+         WHERE user_id=$1 AND category ILIKE $2 AND amount < 0
+           AND COALESCE(tx_type,'expense') != 'transfer'
+           AND date >= date_trunc('month', CURRENT_DATE) - INTERVAL '6 months'
+         GROUP BY date_trunc('month', date) ORDER BY month ASC`,
+        [uid, b.name]
+      )
+      const monthly = rows.map(r => Number(r.spent))
+      const avg     = monthly.length ? monthly.reduce((s, v) => s + v, 0) / monthly.length : 0
+      return { id: b.id, name: b.name, icon: b.icon, current_cap: Number(b.cap), monthly_spent: monthly, avg_monthly: Math.round(avg * 100) / 100 }
+    }))
+
+    const client  = new Anthropic({ apiKey: anthropicKey })
+    const dataStr = spendingData.map(d =>
+      `${d.icon} ${d.name}: cap $${d.current_cap}/mo | avg $${d.avg_monthly}/mo | months: [${d.monthly_spent.map(v => '$' + v.toFixed(0)).join(', ') || 'no data'}]`
+    ).join('\n')
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514', max_tokens: 1500,
+      messages: [{ role: 'user', content: `Analyze this 6-month spending history and suggest optimal monthly budget caps.\n\n${dataStr}\n\nReturn ONLY a JSON array, no markdown:\n[{"id":1,"name":"Groceries","suggested_cap":350,"reasoning":"One sentence with specific numbers."},...]\n\nRules:\n- If avg > current cap: suggest higher cap\n- If avg < current cap × 0.6: suggest lower cap\n- Round all suggested_caps to nearest $25\n- One sentence reasoning with specific numbers` }],
+    })
+
+    let suggestions = []
+    try {
+      const text = response.content[0].text.trim().replace(/```json\n?|\n?```/g, '').trim()
+      suggestions = JSON.parse(text).map(s => ({ ...s, ...spendingData.find(d => d.id === s.id) }))
+    } catch { suggestions = [] }
+
+    res.json({ suggestions, spendingData })
+  } catch (err) { next(err) }
+})

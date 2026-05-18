@@ -103,6 +103,8 @@ router.post('/sync', async (req, res, next) => {
     }
 
     res.json({ success: true, synced: totalSynced })
+    // Apply rules to newly synced transactions in background
+    if (totalSynced > 0) applyRulesToUser(req.user.id).catch(e => console.error("[Rules]", e.message))
   } catch (err) {
     console.error('Plaid sync error:', err.response?.data || err.message)
     next(err)
@@ -196,4 +198,22 @@ function colorForType(type) {
   return map[type] || 'safe'
 }
 
+
+// Exported for cron job — syncs all plaid items for one user
+async function syncTransactionsForUser(userId) {
+  const { rows: items } = await pool.query(
+    'SELECT * FROM plaid_items WHERE user_id = $1',
+    [userId]
+  )
+  let total = 0
+  for (const item of items) {
+    total += await syncTransactions(userId, item.id, item.access_token, item.item_id, item.cursor)
+  }
+  return total
+}
+
+// Also apply rules after user-triggered sync (fire and forget)
+const { applyRulesToUser } = require("./rules")
+
 module.exports = router
+module.exports.syncTransactionsForUser = syncTransactionsForUser

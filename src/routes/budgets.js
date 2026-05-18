@@ -62,6 +62,36 @@ router.post('/', async (req, res, next) => {
   }
 })
 
+// PATCH /api/budgets/:id — update cap, name, icon, or color
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const { name, cap, icon, color } = req.body
+    const updates = []
+    const values  = []
+    let idx = 1
+
+    if (name  !== undefined) { updates.push(`name=$${idx++}`);  values.push(name) }
+    if (cap   !== undefined) { updates.push(`cap=$${idx++}`);   values.push(Number(cap)) }
+    if (icon  !== undefined) { updates.push(`icon=$${idx++}`);  values.push(icon) }
+    if (color !== undefined) { updates.push(`color=$${idx++}`); values.push(color) }
+
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
+
+    values.push(req.params.id)
+    values.push(req.user.id)
+
+    const { rows } = await pool.query(
+      `UPDATE budgets SET ${updates.join(', ')}
+       WHERE id=$${idx} AND user_id=$${idx + 1} RETURNING *`,
+      values
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Budget not found' })
+    res.json(rows[0])
+  } catch (err) {
+    next(err)
+  }
+})
+
 // DELETE /api/budgets/:id
 router.delete('/:id', async (req, res, next) => {
   try {
