@@ -19,16 +19,19 @@ router.get('/', async (req, res, next) => {
     let catClause = ''
     if (category && category !== 'All') {
       baseParams.push(category)
-      catClause = ` AND category = $${baseParams.length}`
+      catClause = ` AND t.category = $${baseParams.length}`
     }
 
-    const baseWhere = `WHERE user_id = $1 AND COALESCE(tx_type,'expense') != 'transfer'${catClause}`
+    const baseWhere = `WHERE t.user_id = $1 AND COALESCE(t.tx_type,'expense') != 'transfer'${catClause}`
 
     // ── 1. Current month — all rows, no limit ──────────────────
     const { rows: currentRows } = await pool.query(
-      `SELECT * FROM transactions ${baseWhere}
-         AND date >= date_trunc('month', CURRENT_DATE)
-       ORDER BY date DESC, id DESC`,
+      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
+       FROM transactions t
+       LEFT JOIN accounts a ON t.account_id = a.id
+       ${baseWhere}
+         AND t.date >= date_trunc('month', CURRENT_DATE)
+       ORDER BY t.date DESC, t.id DESC`,
       baseParams
     )
 
@@ -36,17 +39,21 @@ router.get('/', async (req, res, next) => {
     const histOffset = page * pageSize
     const histParams = [...baseParams, pageSize, histOffset]
     const { rows: histRows } = await pool.query(
-      `SELECT * FROM transactions ${baseWhere}
-         AND date < date_trunc('month', CURRENT_DATE)
-       ORDER BY date DESC, id DESC
+      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
+       FROM transactions t
+       LEFT JOIN accounts a ON t.account_id = a.id
+       ${baseWhere}
+         AND t.date < date_trunc('month', CURRENT_DATE)
+       ORDER BY t.date DESC, t.id DESC
        LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}`,
       histParams
     )
 
     // ── 3. Historical count for hasMore ────────────────────────
     const { rows: countRows } = await pool.query(
-      `SELECT COUNT(*) FROM transactions ${baseWhere}
-         AND date < date_trunc('month', CURRENT_DATE)`,
+      `SELECT COUNT(*) FROM transactions t
+       ${baseWhere}
+         AND t.date < date_trunc('month', CURRENT_DATE)`,
       baseParams
     )
     const totalHistorical = parseInt(countRows[0].count)
@@ -128,7 +135,16 @@ router.patch('/:id', async (req, res, next) => {
       values
     )
     if (!rows.length) return res.status(404).json({ error: 'Transaction not found' })
-    res.json(rows[0])
+
+    // Re-fetch with account JOIN so the frontend gets account_name etc.
+    const { rows: full } = await pool.query(
+      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
+       FROM transactions t
+       LEFT JOIN accounts a ON t.account_id = a.id
+       WHERE t.id = $1`,
+      [rows[0].id]
+    )
+    res.json(full[0])
   } catch (err) {
     next(err)
   }
