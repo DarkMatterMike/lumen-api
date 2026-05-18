@@ -6,33 +6,53 @@ const requireAuth = require('../middleware/requireAuth')
 router.use(requireAuth)
 
 // GET /api/transactions
+// Always returns the full current month. Historical transactions are paginated at 50/page.
+// Query params: page (default 0), category
 router.get('/', async (req, res, next) => {
   try {
-    const limit    = parseInt(req.query.limit) || 50
+    const page     = Math.max(0, parseInt(req.query.page) || 0)
+    const pageSize = 50
     const category = req.query.category
 
-    let query  = "SELECT * FROM transactions WHERE user_id = $1 AND COALESCE(tx_type,'expense') != 'transfer'"
-    const params = [req.user.id]
-
+    // Build optional category clause
+    const baseParams = [req.user.id]
+    let catClause = ''
     if (category && category !== 'All') {
-      params.push(category)
-      query += ` AND category = $${params.length}`
+      baseParams.push(category)
+      catClause = ` AND category = $${baseParams.length}`
     }
 
-    query += ` ORDER BY date DESC, id DESC LIMIT $${params.push(limit)}`
+    const baseWhere = `WHERE user_id = $1 AND COALESCE(tx_type,'expense') != 'transfer'${catClause}`
 
-    const { rows: transactions } = await pool.query(query, params)
+    // ── 1. Current month — all rows, no limit ──────────────────
+    const { rows: currentRows } = await pool.query(
+      `SELECT * FROM transactions ${baseWhere}
+         AND date >= date_trunc('month', CURRENT_DATE)
+       ORDER BY date DESC, id DESC`,
+      baseParams
+    )
 
-    const grouped = transactions.reduce((acc, tx) => {
-      const date = new Date(tx.date).toLocaleDateString('en-US', {
-        weekday: 'long', month: 'long', day: 'numeric',
-      })
-      if (!acc[date]) acc[date] = []
-      acc[date].push(tx)
-      return acc
-    }, {})
+    // ── 2. Historical — paginated ──────────────────────────────
+    const histOffset = page * pageSize
+    const histParams = [...baseParams, pageSize, histOffset]
+    const { rows: histRows } = await pool.query(
+      `SELECT * FROM transactions ${baseWhere}
+         AND date < date_trunc('month', CURRENT_DATE)
+       ORDER BY date DESC, id DESC
+       LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}`,
+      histParams
+    )
 
-    // Monthly totals — exclude transfers
+    // ── 3. Historical count for hasMore ────────────────────────
+    const { rows: countRows } = await pool.query(
+      `SELECT COUNT(*) FROM transactions ${baseWhere}
+         AND date < date_trunc('month', CURRENT_DATE)`,
+      baseParams
+    )
+    const totalHistorical = parseInt(countRows[0].count)
+    const hasMore = (page + 1) * pageSize < totalHistorical
+
+    // ── 4. Monthly totals (current month, all rows) ────────────
     const { rows: totals } = await pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN tx_type = 'income'  OR (tx_type IS NULL AND amount > 0) THEN ABS(amount) ELSE 0 END), 0) AS income,
@@ -45,7 +65,12 @@ router.get('/', async (req, res, next) => {
       [req.user.id]
     )
 
-    res.json({ grouped, totals: totals[0] })
+    res.json({
+      currentMonth: currentRows,
+      historical:   histRows,
+      totals:       totals[0],
+      pagination:   { page, pageSize, total: totalHistorical, hasMore },
+    })
   } catch (err) {
     next(err)
   }
