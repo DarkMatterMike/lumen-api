@@ -76,3 +76,26 @@ router.delete('/:id', async (req, res, next) => {
 })
 
 module.exports = router
+
+// GET /api/budgets/:id/transactions — transactions for a specific budget category
+router.get('/:id/transactions', async (req, res, next) => {
+  try {
+    const uid = req.user.id
+    const { rows: budget } = await pool.query(
+      'SELECT * FROM budgets WHERE id=$1 AND user_id=$2',
+      [req.params.id, uid]
+    )
+    if (!budget.length) return res.status(404).json({ error: 'Budget not found' })
+
+    const { rows: transactions } = await pool.query(
+      `SELECT * FROM transactions
+       WHERE user_id=$1 AND category ILIKE $2 AND amount<0
+         AND date>=date_trunc('month',CURRENT_DATE)
+       ORDER BY date DESC, id DESC`,
+      [uid, budget[0].name]
+    )
+    res.json({ transactions })
+  } catch (err) {
+    next(err)
+  }
+})
