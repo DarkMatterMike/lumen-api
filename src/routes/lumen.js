@@ -41,7 +41,8 @@ async function buildFinancialContext(userId) {
        COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0) AS income,
        COUNT(*) AS tx_count
      FROM transactions
-     WHERE user_id=$1 AND date>=date_trunc('month',CURRENT_DATE)`,
+     WHERE user_id=$1 AND date>=date_trunc('month',CURRENT_DATE)
+       AND COALESCE(tx_type,'expense') != 'transfer'`,
     [uid]
   )
   const { spent: monthSpent, income: monthIncome, tx_count } = monthTotals[0]
@@ -51,13 +52,23 @@ async function buildFinancialContext(userId) {
     `SELECT category, SUM(ABS(amount)) AS total
      FROM transactions
      WHERE user_id=$1 AND amount<0 AND date>=date_trunc('month',CURRENT_DATE)
+       AND COALESCE(tx_type,'expense') != 'transfer'
      GROUP BY category ORDER BY total DESC LIMIT 8`,
     [uid]
   )
 
-  // Budget caps and current usage
+  // Budget caps and current month usage
   const { rows: budgets } = await pool.query(
-    'SELECT name, cap, icon FROM budgets WHERE user_id=$1', [uid]
+    `SELECT b.name, b.cap, b.icon,
+       COALESCE(SUM(CASE WHEN t.amount < 0 AND COALESCE(t.tx_type,'expense') != 'transfer' THEN ABS(t.amount) ELSE 0 END), 0) AS spent
+     FROM budgets b
+     LEFT JOIN transactions t
+       ON t.user_id = b.user_id
+       AND LOWER(t.category) = LOWER(b.name)
+       AND t.date >= date_trunc('month', CURRENT_DATE)
+     WHERE b.user_id = $1
+     GROUP BY b.id, b.name, b.cap, b.icon`,
+    [uid]
   )
 
   // Recent transactions (last 20)
@@ -116,20 +127,28 @@ THIS MONTH (${daysLeft} days remaining)
 - Net: ${(Number(monthIncome) - Number(monthSpent)) >= 0 ? '+' : ''}$${(Number(monthIncome) - Number(monthSpent)).toLocaleString()}
 - Transactions: ${tx_count}
 
-TOP SPENDING CATEGORIES THIS MONTH
+TOP SPENDING CATEGORIES THIS MONTH (transfers excluded)
 ${categories.map(c => `- ${c.category}: $${Number(c.total).toFixed(2)}`).join('\n') || '- No spending data yet'}
 
-BUDGET CAPS
-${budgets.length > 0 ? budgets.map(b => `- ${b.name}: $${Number(b.cap).toLocaleString()} cap/month`).join('\n') : '- No budget categories set'}
+BUDGET CAPS — THIS MONTH
+${budgets.length > 0 ? budgets.map(b => {
+  const spent = Number(b.spent)
+  const cap   = Number(b.cap)
+  const pct   = cap > 0 ? Math.round((spent / cap) * 100) : 0
+  const flag  = pct >= 90 ? ' ⚠️ AT CAP' : pct >= 75 ? ' 🔶 NEAR CAP' : ''
+  return `- ${b.name}: $${spent.toFixed(2)} spent of $${cap.toLocaleString()} cap (${pct}%)${flag}`
+}).join('\n') : '- No budget categories set'}
 
-UPCOMING BILLS
-${upcomingBills.length > 0 ? upcomingBills.map(b => `- ${b.name}: $${Number(b.amount).toLocaleString()} (day ${b.day_of_month})`).join('\n') : '- No upcoming bills'}
-${nextPaycheck ? `- Next paycheck: $${Number(nextPaycheck.amount).toLocaleString()} on day ${nextPaycheck.day_of_month}` : ''}
+ALL RECURRING ITEMS THIS MONTH
+${recurring.length > 0 ? recurring.map(r => {
+  const isPast = r.day_of_month < todayDay
+  return `- ${r.name}: ${r.type === 'income' ? '+' : '-'}$${Number(r.amount).toLocaleString()} on day ${r.day_of_month}${isPast ? ' [passed]' : ' [upcoming]'}`
+}).join('\n') : '- No recurring items'}
 
-RECENT TRANSACTIONS (last 20)
+RECENT TRANSACTIONS (last 20, transfers excluded)
 ${recentTx.map(t => `- ${new Date(t.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}: ${t.name} ${Number(t.amount) < 0 ? '−' : '+'}$${Math.abs(Number(t.amount)).toFixed(2)} [${t.category}]`).join('\n')}
 
-3-MONTH AVERAGES
+3-MONTH AVERAGES (transfers excluded)
 - Avg monthly spend: $${avgMonthlySpend.toLocaleString()}
 - Avg monthly income: $${avgMonthlyIncome.toLocaleString()}
 - Savings rate: ${savingsRate}%
