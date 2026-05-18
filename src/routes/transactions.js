@@ -75,4 +75,36 @@ router.post('/', async (req, res, next) => {
   }
 })
 
+// PATCH /api/transactions/:id — edit a transaction
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const { name, category, amount, date, note, account_id } = req.body
+    const updates = []
+    const values  = []
+    let idx = 1
+
+    if (name       !== undefined) { updates.push(`name=$${idx++}`);       values.push(name) }
+    if (category   !== undefined) { updates.push(`category=$${idx++}`);   values.push(category) }
+    if (amount     !== undefined) { updates.push(`amount=$${idx++}`);     values.push(amount) }
+    if (date       !== undefined) { updates.push(`date=$${idx++}`);       values.push(date) }
+    if (note       !== undefined) { updates.push(`note=$${idx++}`);       values.push(note) }
+    if (account_id !== undefined) { updates.push(`account_id=$${idx++}`); values.push(account_id) }
+
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
+
+    values.push(req.params.id)
+    values.push(req.user.id)
+
+    const { rows } = await pool.query(
+      `UPDATE transactions SET ${updates.join(', ')}
+       WHERE id=$${idx} AND user_id=$${idx + 1} RETURNING *`,
+      values
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Transaction not found' })
+    res.json(rows[0])
+  } catch (err) {
+    next(err)
+  }
+})
+
 module.exports = router
