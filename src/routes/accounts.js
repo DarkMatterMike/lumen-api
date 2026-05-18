@@ -28,6 +28,33 @@ router.get('/', async (req, res, next) => {
   }
 })
 
+// PATCH /api/accounts/:id — update include_in_balance (and other fields as needed)
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const { include_in_balance } = req.body
+    const updates = []
+    const values  = []
+    let idx = 1
+
+    if (include_in_balance !== undefined) {
+      updates.push(`include_in_balance=$${idx++}`)
+      values.push(include_in_balance)
+    }
+
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
+
+    values.push(req.params.id)
+    values.push(req.user.id)
+
+    const { rows } = await pool.query(
+      `UPDATE accounts SET ${updates.join(', ')} WHERE id=$${idx} AND user_id=$${idx + 1} RETURNING *`,
+      values
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Account not found' })
+    res.json(rows[0])
+  } catch (err) { next(err) }
+})
+
 // GET /api/accounts/:id
 router.get('/:id', async (req, res, next) => {
   try {

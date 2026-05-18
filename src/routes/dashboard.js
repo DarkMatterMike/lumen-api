@@ -9,11 +9,12 @@ router.get('/', async (req, res, next) => {
   try {
     const uid = req.user.id
 
-    const { rows: checking } = await pool.query(
-      "SELECT * FROM accounts WHERE user_id=$1 AND type='checking' LIMIT 1",
+    const { rows: balanceRows } = await pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN is_debt THEN -balance ELSE balance END), 0) AS balance
+       FROM accounts WHERE user_id=$1 AND include_in_balance=TRUE`,
       [uid]
     )
-    const balance = checking.length ? Number(checking[0].balance) : 0
+    const balance = Number(balanceRows[0].balance)
 
     const today    = new Date()
     const todayDay = today.getDate()
