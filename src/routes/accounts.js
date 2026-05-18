@@ -1,37 +1,45 @@
-const express = require('express')
-const router = express.Router()
-const pool = require('../db/pool')
+const express     = require('express')
+const router      = express.Router()
+const pool        = require('../db/pool')
+const requireAuth = require('../middleware/requireAuth')
 
-// GET /api/accounts — all accounts with net worth summary
+router.use(requireAuth)
+
+// GET /api/accounts
 router.get('/', async (req, res, next) => {
   try {
-    const { rows: accounts } = await pool.query(`
-      SELECT * FROM accounts ORDER BY is_debt ASC, name ASC
-    `)
+    const { rows: accounts } = await pool.query(
+      'SELECT * FROM accounts WHERE user_id = $1 ORDER BY is_debt ASC, name ASC',
+      [req.user.id]
+    )
 
-    // Calculate net worth: assets - liabilities
     const netWorth = accounts.reduce((sum, a) => {
       return a.is_debt ? sum - Number(a.balance) : sum + Number(a.balance)
     }, 0)
 
-    res.json({ accounts, netWorth })
+    const { rows: syncInfo } = await pool.query(
+      'SELECT MAX(last_synced) AS last_synced FROM plaid_items WHERE user_id = $1',
+      [req.user.id]
+    )
+
+    res.json({ accounts, netWorth, lastSynced: syncInfo[0]?.last_synced || null })
   } catch (err) {
     next(err)
   }
 })
 
-// GET /api/accounts/:id — single account with recent transactions
+// GET /api/accounts/:id
 router.get('/:id', async (req, res, next) => {
   try {
     const { rows: accounts } = await pool.query(
-      'SELECT * FROM accounts WHERE id = $1',
-      [req.params.id]
+      'SELECT * FROM accounts WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
     )
     if (!accounts.length) return res.status(404).json({ error: 'Account not found' })
 
     const { rows: transactions } = await pool.query(
-      'SELECT * FROM transactions WHERE account_id = $1 ORDER BY date DESC LIMIT 10',
-      [req.params.id]
+      'SELECT * FROM transactions WHERE account_id = $1 AND user_id = $2 ORDER BY date DESC LIMIT 10',
+      [req.params.id, req.user.id]
     )
 
     res.json({ account: accounts[0], transactions })

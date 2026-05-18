@@ -1,22 +1,26 @@
-const express = require('express')
-const router = express.Router()
-const pool = require('../db/pool')
+const express     = require('express')
+const router      = express.Router()
+const pool        = require('../db/pool')
+const requireAuth = require('../middleware/requireAuth')
 
-// GET /api/budgets — all budgets with current month spending
+router.use(requireAuth)
+
 router.get('/', async (req, res, next) => {
   try {
-    const { rows: budgets } = await pool.query('SELECT * FROM budgets ORDER BY cap DESC')
+    const uid = req.user.id
+    const { rows: budgets } = await pool.query(
+      'SELECT * FROM budgets WHERE user_id=$1 ORDER BY cap DESC',
+      [uid]
+    )
 
-    // For each budget, sum this month's spending in that category
     const budgetsWithSpend = await Promise.all(
       budgets.map(async (budget) => {
         const { rows } = await pool.query(
-          `SELECT COALESCE(SUM(ABS(amount)), 0) AS spent
+          `SELECT COALESCE(SUM(ABS(amount)),0) AS spent
            FROM transactions
-           WHERE category ILIKE $1
-             AND amount < 0
-             AND date >= date_trunc('month', CURRENT_DATE)`,
-          [budget.name]
+           WHERE user_id=$1 AND category ILIKE $2 AND amount<0
+             AND date>=date_trunc('month',CURRENT_DATE)`,
+          [uid, budget.name]
         )
         return {
           ...budget,
@@ -26,9 +30,8 @@ router.get('/', async (req, res, next) => {
       })
     )
 
-    // Total budgeted vs total spent this month
     const totalBudgeted = budgets.reduce((s, b) => s + Number(b.cap), 0)
-    const totalSpent = budgetsWithSpend.reduce((s, b) => s + b.spent, 0)
+    const totalSpent    = budgetsWithSpend.reduce((s, b) => s + b.spent, 0)
 
     res.json({ budgets: budgetsWithSpend, totalBudgeted, totalSpent })
   } catch (err) {
