@@ -11,7 +11,7 @@ router.get('/', async (req, res, next) => {
     const limit    = parseInt(req.query.limit) || 50
     const category = req.query.category
 
-    let query  = 'SELECT * FROM transactions WHERE user_id = $1'
+    let query  = "SELECT * FROM transactions WHERE user_id = $1 AND COALESCE(tx_type,'expense') != 'transfer'"
     const params = [req.user.id]
 
     if (category && category !== 'All') {
@@ -23,7 +23,6 @@ router.get('/', async (req, res, next) => {
 
     const { rows: transactions } = await pool.query(query, params)
 
-    // Group by date
     const grouped = transactions.reduce((acc, tx) => {
       const date = new Date(tx.date).toLocaleDateString('en-US', {
         weekday: 'long', month: 'long', day: 'numeric',
@@ -33,14 +32,16 @@ router.get('/', async (req, res, next) => {
       return acc
     }, {})
 
-    // Monthly totals
+    // Monthly totals — exclude transfers
     const { rows: totals } = await pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS income,
-         COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS spending,
+         COALESCE(SUM(CASE WHEN tx_type = 'income'  OR (tx_type IS NULL AND amount > 0) THEN ABS(amount) ELSE 0 END), 0) AS income,
+         COALESCE(SUM(CASE WHEN tx_type = 'expense' OR (tx_type IS NULL AND amount < 0) THEN ABS(amount) ELSE 0 END), 0) AS spending,
          COUNT(*) AS count
        FROM transactions
-       WHERE user_id = $1 AND date >= date_trunc('month', CURRENT_DATE)`,
+       WHERE user_id = $1
+         AND COALESCE(tx_type,'expense') != 'transfer'
+         AND date >= date_trunc('month', CURRENT_DATE)`,
       [req.user.id]
     )
 
@@ -53,15 +54,15 @@ router.get('/', async (req, res, next) => {
 // POST /api/transactions
 router.post('/', async (req, res, next) => {
   try {
-    const { account_id, name, amount, category, icon, date } = req.body
+    const { account_id, name, amount, category, icon, date, tx_type } = req.body
     if (!account_id || !name || amount === undefined || !category) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO transactions (user_id, account_id, name, amount, category, icon, date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [req.user.id, account_id, name, amount, category, icon || null, date || new Date()]
+      `INSERT INTO transactions (user_id, account_id, name, amount, category, icon, date, tx_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [req.user.id, account_id, name, amount, category, icon || null, date || new Date(), tx_type || 'expense']
     )
 
     await pool.query(
@@ -75,10 +76,10 @@ router.post('/', async (req, res, next) => {
   }
 })
 
-// PATCH /api/transactions/:id — edit a transaction
+// PATCH /api/transactions/:id
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { name, category, amount, date, note, account_id } = req.body
+    const { name, category, amount, date, note, account_id, tx_type } = req.body
     const updates = []
     const values  = []
     let idx = 1
@@ -89,6 +90,7 @@ router.patch('/:id', async (req, res, next) => {
     if (date       !== undefined) { updates.push(`date=$${idx++}`);       values.push(date) }
     if (note       !== undefined) { updates.push(`note=$${idx++}`);       values.push(note) }
     if (account_id !== undefined) { updates.push(`account_id=$${idx++}`); values.push(account_id) }
+    if (tx_type    !== undefined) { updates.push(`tx_type=$${idx++}`);    values.push(tx_type) }
 
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
 

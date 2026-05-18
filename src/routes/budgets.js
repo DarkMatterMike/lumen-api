@@ -19,7 +19,7 @@ router.get('/', async (req, res, next) => {
         const { rows } = await pool.query(
           `SELECT COALESCE(SUM(ABS(amount)),0) AS spent
            FROM transactions
-           WHERE user_id=$1 AND category ILIKE $2 AND amount<0
+           WHERE user_id=$1 AND category ILIKE $2 AND amount<0 AND COALESCE(tx_type,'expense') != 'transfer'
              AND date>=date_trunc('month',CURRENT_DATE)`,
           [uid, budget.name]
         )
@@ -89,7 +89,7 @@ router.get('/:id/transactions', async (req, res, next) => {
 
     const { rows: transactions } = await pool.query(
       `SELECT * FROM transactions
-       WHERE user_id=$1 AND category ILIKE $2 AND amount<0
+       WHERE user_id=$1 AND category ILIKE $2 AND amount<0 AND COALESCE(tx_type,'expense') != 'transfer'
          AND date>=date_trunc('month',CURRENT_DATE)
        ORDER BY date DESC, id DESC`,
       [uid, budget[0].name]
