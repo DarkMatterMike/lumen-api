@@ -70,9 +70,9 @@ router.get('/', async (req, res, next) => {
       ? Math.min(100, Math.round((committedBills / totalAvailable) * 100))
       : 100
     const pressureLabel =
-      pressureScore < 25 ? 'SAFE' :
-      pressureScore < 50 ? 'WATCH' :
-      pressureScore < 75 ? 'TIGHT' : 'CRITICAL'
+      pressureScore < 20 ? 'SAFE' :
+      pressureScore < 45 ? 'WATCH' :
+      pressureScore < 70 ? 'TIGHT' : 'CRITICAL'
 
     const upcomingBills = remainingExpenses.slice(0, 5)
     const nextPaycheck  = remainingIncome[0] || null

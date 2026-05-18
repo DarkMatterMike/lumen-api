@@ -102,7 +102,7 @@ async function buildFinancialContext(userId) {
     : 0
 
   const pressureScore = balance > 0 ? Math.min(100, Math.round((committedBills / balance) * 100)) : 100
-  const pressureLabel = pressureScore < 25 ? 'SAFE' : pressureScore < 50 ? 'WATCH' : pressureScore < 75 ? 'TIGHT' : 'CRITICAL'
+  const pressureLabel = pressureScore < 20 ? 'SAFE' : pressureScore < 45 ? 'WATCH' : pressureScore < 70 ? 'TIGHT' : 'CRITICAL'
 
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
   const daysLeft    = daysInMonth - todayDay
