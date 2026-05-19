@@ -16,15 +16,33 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// Keywords that signal the user wants to SKIP/AVOID a cost (frees up money)
+const SAVING_KEYWORDS = [
+  'skip', 'cancel', 'avoid', 'defer', "don't pay", 'not pay',
+  'forgo', 'hold off', 'pause', 'delay', 'drop', 'cut', 'remove',
+  'stop paying', 'not spend', 'save instead', 'skip payment',
+]
+
+function detectDirection(question) {
+  const q = (question || '').toLowerCase()
+  return SAVING_KEYWORDS.some(kw => q.includes(kw)) ? -1 : 1
+}
+
 // POST /api/plans — pin a new plan
 router.post('/', async (req, res, next) => {
   try {
-    const { question, response, amount } = req.body
+    const { question, response, amount, direction: clientDirection } = req.body
     if (!question || !response) return res.status(400).json({ error: 'question and response required' })
+
+    // Client can explicitly pass direction; otherwise we detect from question text
+    const direction = clientDirection !== undefined
+      ? Number(clientDirection)
+      : detectDirection(question)
+
     const { rows } = await pool.query(
-      `INSERT INTO plans (user_id, question, response, amount, status)
-       VALUES ($1, $2, $3, $4, 'active') RETURNING *`,
-      [req.user.id, question, response, amount || null]
+      `INSERT INTO plans (user_id, question, response, amount, status, direction)
+       VALUES ($1, $2, $3, $4, 'active', $5) RETURNING *`,
+      [req.user.id, question, response, amount || null, direction]
     )
     res.status(201).json(rows[0])
   } catch (err) { next(err) }

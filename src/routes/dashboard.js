@@ -64,13 +64,15 @@ router.get('/', async (req, res, next) => {
       [uid]
     )
 
-    // Active pinned plans — subtract their amounts from free-to-spend
+    // Active pinned plans — direction +1 = new cost (subtract), -1 = saving/skip (add back)
     const { rows: activePlans } = await pool.query(
       `SELECT * FROM plans WHERE user_id=$1 AND status='active' ORDER BY created_at DESC`,
       [uid]
     )
-    const plannedSpend = activePlans.reduce((s, p) => s + Number(p.amount || 0), 0)
-    const balanceAfterPlans = balanceAfterBills - plannedSpend
+    const planImpact      = activePlans.reduce((s, p) => s + Number(p.amount || 0) * Number(p.direction ?? 1), 0)
+    const plannedSpend    = activePlans.filter(p => Number(p.direction ?? 1) > 0).reduce((s, p) => s + Number(p.amount || 0), 0)
+    const plannedSavings  = activePlans.filter(p => Number(p.direction ?? 1) < 0).reduce((s, p) => s + Number(p.amount || 0), 0)
+    const balanceAfterPlans = balanceAfterBills - planImpact
 
     // Pressure = bills remaining vs (balance + incoming pay)
     const totalAvailable = balance + upcomingPayTotal
@@ -93,6 +95,7 @@ router.get('/', async (req, res, next) => {
       upcomingBills, nextPaycheck,
       activePlans,
       plannedSpend,
+      plannedSavings,
     })
   } catch (err) {
     next(err)
