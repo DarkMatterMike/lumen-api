@@ -136,6 +136,16 @@ router.patch('/:id', async (req, res, next) => {
     )
     if (!rows.length) return res.status(404).json({ error: 'Transaction not found' })
 
+    // If category was changed, record it as a correction for AI learning
+    if (category !== undefined && req.body._original_category && req.body._original_category !== category) {
+      const merchantName = (rows[0].name || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()
+      pool.query(
+        `INSERT INTO category_corrections (user_id, transaction_id, merchant_name, original_category, corrected_category)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.user.id, rows[0].id, merchantName, req.body._original_category, category]
+      ).catch(err => console.error('[Corrections] insert error:', err.message))
+    }
+
     // Re-fetch with account JOIN so the frontend gets account_name etc.
     const { rows: full } = await pool.query(
       `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
