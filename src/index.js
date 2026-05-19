@@ -25,6 +25,7 @@ const duplicatesRoutes    = require('./routes/duplicates')
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
 const { syncGmailForUser, runPhase5 } = require('./routes/gmail-parser')
+const { checkPaceAlerts, autoCompleteCategories } = require('./utils/budgetIntelligence')
 
 const app = express()
 
@@ -73,15 +74,24 @@ app.listen(PORT, () => {
 setInterval(async () => {
   console.log('[Cron] Starting hourly transaction sync...')
   try {
-    const { rows: users } = await pool.query('SELECT DISTINCT user_id FROM plaid_items')
-    for (const { user_id } of users) {
-      const added = await syncTransactionsForUser(user_id)
+    // Get all users — union plaid users + any users with manual transactions
+    const { rows: plaidUsers } = await pool.query('SELECT DISTINCT user_id FROM plaid_items')
+    const { rows: allUsers }   = await pool.query('SELECT DISTINCT id AS user_id FROM users')
+    const userIds = [...new Set([...plaidUsers.map(u => u.user_id), ...allUsers.map(u => u.user_id)])]
+
+    for (const user_id of userIds) {
+      // Plaid sync (only if connected)
+      const added = await syncTransactionsForUser(user_id).catch(() => 0)
       if (added > 0) {
         await applyRulesToUser(user_id)
         console.log(`[Cron] user ${user_id}: +${added} transactions, rules applied`)
         await syncGmailForUser(user_id).catch(e => console.warn('[Cron Gmail]', e.message))
         await runPhase5(user_id).catch(e => console.warn('[Cron P5]', e.message))
       }
+
+      // Phase C — budget intelligence (runs for ALL users every hour)
+      await checkPaceAlerts(user_id).catch(e => console.warn('[Cron PaceAlerts]', e.message))
+      await autoCompleteCategories(user_id).catch(e => console.warn('[Cron AutoComplete]', e.message))
     }
   } catch (err) {
     console.error('[Cron] Hourly sync error:', err.message)

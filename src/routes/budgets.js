@@ -2,6 +2,7 @@ const express     = require('express')
 const router      = express.Router()
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
+const { predictEndOfMonth, checkPaceAlerts, autoCompleteCategories } = require('../utils/budgetIntelligence')
 
 router.use(requireAuth)
 
@@ -143,4 +144,32 @@ router.patch('/:id/complete', async (req, res, next) => {
   } catch (err) {
     next(err)
   }
+})
+
+// ── Phase C: Budget Intelligence endpoints ────────────────────────────────────
+
+// GET /api/budgets/forecast — EOM prediction + per-budget pace
+router.get('/forecast', async (req, res, next) => {
+  try {
+    const data = await predictEndOfMonth(req.user.id)
+    res.json(data)
+  } catch (err) { next(err) }
+})
+
+// POST /api/budgets/pace-check — manually trigger pace alert check
+// (also runs from cron)
+router.post('/pace-check', async (req, res, next) => {
+  try {
+    const fired = await checkPaceAlerts(req.user.id)
+    res.json({ success: true, alerts_fired: fired })
+  } catch (err) { next(err) }
+})
+
+// POST /api/budgets/auto-complete — manually trigger auto-complete check
+// (also runs from cron)
+router.post('/auto-complete', async (req, res, next) => {
+  try {
+    const completed = await autoCompleteCategories(req.user.id)
+    res.json({ success: true, completed })
+  } catch (err) { next(err) }
 })
