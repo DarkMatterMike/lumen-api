@@ -48,18 +48,18 @@ router.get('/', async (req, res, next) => {
       .reduce((s, r) => s + Number(r.amount), 0)
 
     // Accounts for allocation breakdown:
-    // Include accounts that are either (a) linked to a recurring item via account_id,
-    // or (b) toggled include_in_balance=TRUE (user-selected dashboard accounts)
-    const { rows: accounts } = await pool.query(
+    // Priority 1: accounts linked directly to a recurring item (account_id)
+    // Priority 2: accounts toggled include_in_balance=TRUE
+    // Fallback: all non-debt accounts (so the section is never blank)
+    let { rows: accounts } = await pool.query(
       `SELECT a.id, a.name, a.type, a.balance, a.mask, a.icon, a.include_in_balance
        FROM accounts a
-       WHERE a.user_id=$1
-         AND a.is_debt=FALSE
-         AND (a.include_in_balance=TRUE OR a.id IN (
-           SELECT DISTINCT account_id FROM recurring
-           WHERE user_id=$1 AND active=TRUE AND account_id IS NOT NULL
-         ))
-       ORDER BY a.include_in_balance DESC, a.balance DESC`,
+       WHERE a.user_id=$1 AND a.is_debt=FALSE
+       ORDER BY
+         (a.id IN (SELECT DISTINCT account_id FROM recurring WHERE user_id=$1 AND active=TRUE AND account_id IS NOT NULL)) DESC,
+         a.include_in_balance DESC,
+         a.balance DESC
+       LIMIT 8`,
       [uid]
     )
 
