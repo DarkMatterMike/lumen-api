@@ -110,7 +110,7 @@ router.post('/', async (req, res, next) => {
 // PATCH /api/calendar/:id — edit a recurring item
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { name, amount, day_of_month, type, icon, active, frequency, start_date } = req.body
+    const { name, amount, day_of_month, type, icon, active, frequency, start_date, account_id } = req.body
     const updates = []
     const values  = []
     let idx = 1
@@ -123,6 +123,7 @@ router.patch('/:id', async (req, res, next) => {
     if (active       !== undefined) { updates.push(`active=$${idx++}`);       values.push(active) }
     if (frequency    !== undefined) { updates.push(`frequency=$${idx++}`);    values.push(frequency) }
     if (start_date   !== undefined) { updates.push(`start_date=$${idx++}`);   values.push(start_date) }
+    if (account_id   !== undefined) { updates.push(`account_id=$${idx++}`);   values.push(account_id || null) }
 
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
 
