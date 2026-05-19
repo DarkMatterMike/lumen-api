@@ -47,13 +47,29 @@ router.get('/', async (req, res, next) => {
       .filter(r => r.type !== 'income')
       .reduce((s, r) => s + Number(r.amount), 0)
 
-    // Accounts for allocation breakdown
+    // Accounts for allocation breakdown:
+    // Include accounts that are either (a) linked to a recurring item via account_id,
+    // or (b) toggled include_in_balance=TRUE (user-selected dashboard accounts)
     const { rows: accounts } = await pool.query(
-      "SELECT name, type, balance, mask FROM accounts WHERE user_id=$1 AND is_debt=FALSE ORDER BY balance DESC LIMIT 6",
+      `SELECT a.id, a.name, a.type, a.balance, a.mask, a.icon, a.include_in_balance
+       FROM accounts a
+       WHERE a.user_id=$1
+         AND a.is_debt=FALSE
+         AND (a.include_in_balance=TRUE OR a.id IN (
+           SELECT DISTINCT account_id FROM recurring
+           WHERE user_id=$1 AND active=TRUE AND account_id IS NOT NULL
+         ))
+       ORDER BY a.include_in_balance DESC, a.balance DESC`,
       [uid]
     )
 
-    res.json({ recurring, expanded, upcoming, remainingBills, nextPaycheck: upcoming.find(r => r.type === 'income') || null, accounts })
+    // Tag each expanded item with its source account name for display
+    const expandedWithAccount = expanded.map(ev => {
+      const acct = accounts.find(a => a.id === ev.account_id)
+      return { ...ev, account_name: acct?.name || null, account_mask: acct?.mask || null }
+    })
+
+    res.json({ recurring, expanded: expandedWithAccount, upcoming, remainingBills, nextPaycheck: upcoming.find(r => r.type === 'income') || null, accounts })
   } catch (err) {
     next(err)
   }
