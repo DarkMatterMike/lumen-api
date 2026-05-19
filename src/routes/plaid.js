@@ -4,6 +4,12 @@ const plaidClient = require('../db/plaid')
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 const { Products, CountryCode } = require('plaid')
+const {
+  cleanMerchantName,
+  categorizeTransaction,
+  detectDuplicates,
+  detectRecurringAmountChanges,
+} = require('../utils/transactionIntelligence')
 
 // All Plaid routes require auth
 router.use(requireAuth)
@@ -127,7 +133,7 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
 
     const { added: newTxs, modified, removed, next_cursor, has_more } = response.data
 
-    // Insert new transactions
+    // Insert new transactions — Phase B: clean name → rules-first categorization
     for (const tx of newTxs) {
       const accountRes = await pool.query(
         'SELECT id FROM accounts WHERE plaid_account_id = $1 AND user_id = $2',
@@ -136,16 +142,29 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
       if (!accountRes.rows.length) continue
 
       const accountId = accountRes.rows[0].id
-      const amount = -tx.amount // Plaid: positive = debit, we store negative = expense
-      const category = tx.personal_finance_category?.primary || tx.category?.[0] || 'Other'
+      const amount    = -tx.amount // Plaid: positive = debit, we store negative = expense
+
+      // Phase B-1: Clean the merchant name
+      const { cleanedName, category: merchantCategory, icon: merchantIcon } =
+        await cleanMerchantName(tx.name, userId).catch(() => ({ cleanedName: tx.name, category: null, icon: null }))
+
+      // Phase B-2: Categorize via rules → corrections → AI pipeline
+      // Plaid's category is our fallback seed hint only
+      const plaidCategory = tx.personal_finance_category?.primary || tx.category?.[0] || null
+      const { category, icon } = await categorizeTransaction(tx.name, amount, userId)
+        .catch(() => ({ category: merchantCategory || plaidCategory || 'Other', icon: merchantIcon }))
+
+      const finalCategory = category || merchantCategory || plaidCategory || 'Other'
+      const finalIcon     = icon || merchantIcon || null
 
       const { rows: inserted } = await pool.query(
         `INSERT INTO transactions
-           (user_id, account_id, plaid_transaction_id, name, amount, category, icon, date)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           (user_id, account_id, plaid_transaction_id, name, cleaned_name, amount, category, icon, date, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'plaid')
          ON CONFLICT (plaid_transaction_id) DO NOTHING
          RETURNING id`,
-        [userId, accountId, tx.transaction_id, tx.name, amount, category, null, tx.date]
+        [userId, accountId, tx.transaction_id, tx.name, cleanedName !== tx.name ? cleanedName : null,
+         amount, finalCategory, finalIcon, tx.date]
       )
       if (inserted.length) {
         newTxIds.push(inserted[0].id)
@@ -186,6 +205,14 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
     const { enrichNewTransactions } = require('./gmail-parser')
     enrichNewTransactions(userId, newTxIds).catch(e =>
       console.warn('[Gmail enrichment]', e.message)
+    )
+
+    // Phase B — duplicate detection + recurring amount change detection (fire and forget)
+    detectDuplicates(userId, newTxIds).catch(e =>
+      console.warn('[Phase B] Duplicate detection error:', e.message)
+    )
+    detectRecurringAmountChanges(userId, newTxIds).catch(e =>
+      console.warn('[Phase B] Recurring change detection error:', e.message)
     )
   }
 

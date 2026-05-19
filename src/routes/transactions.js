@@ -2,6 +2,10 @@ const express     = require('express')
 const router      = express.Router()
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
+const {
+  cleanMerchantName,
+  categorizeTransaction,
+} = require('../utils/transactionIntelligence')
 
 router.use(requireAuth)
 
@@ -86,15 +90,30 @@ router.get('/', async (req, res, next) => {
 // POST /api/transactions
 router.post('/', async (req, res, next) => {
   try {
-    const { account_id, name, amount, category, icon, date, tx_type } = req.body
-    if (!account_id || !name || amount === undefined || !category) {
+    const { account_id, name, amount, category, icon, date, tx_type, note } = req.body
+    if (!account_id || !name || amount === undefined) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
+    // Phase B: clean merchant name + auto-categorize if no category provided
+    const { cleanedName, category: merchantCategory, icon: merchantIcon } =
+      await cleanMerchantName(name, req.user.id).catch(() => ({ cleanedName: name, category: null, icon: null }))
+
+    let finalCategory = category
+    if (!finalCategory) {
+      const { category: aiCat } = await categorizeTransaction(name, Number(amount), req.user.id)
+        .catch(() => ({ category: merchantCategory || (Number(amount) > 0 ? 'Income' : 'Other') }))
+      finalCategory = aiCat || merchantCategory || (Number(amount) > 0 ? 'Income' : 'Other')
+    }
+
+    const finalIcon = icon || merchantIcon || null
+    const finalCleanedName = (cleanedName && cleanedName !== name) ? cleanedName : null
+
     const { rows } = await pool.query(
-      `INSERT INTO transactions (user_id, account_id, name, amount, category, icon, date, tx_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [req.user.id, account_id, name, amount, category, icon || null, date || new Date(), tx_type || 'expense']
+      `INSERT INTO transactions (user_id, account_id, name, cleaned_name, amount, category, icon, date, tx_type, note, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'manual') RETURNING *`,
+      [req.user.id, account_id, name, finalCleanedName, amount, finalCategory, finalIcon,
+       date || new Date(), tx_type || (Number(amount) > 0 ? 'income' : 'expense'), note || null]
     )
 
     await pool.query(
@@ -102,7 +121,16 @@ router.post('/', async (req, res, next) => {
       [amount, account_id, req.user.id]
     )
 
-    res.status(201).json(rows[0])
+    // Re-fetch with account JOIN
+    const { rows: full } = await pool.query(
+      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
+       FROM transactions t
+       LEFT JOIN accounts a ON t.account_id = a.id
+       WHERE t.id = $1`,
+      [rows[0].id]
+    )
+
+    res.status(201).json(full[0])
   } catch (err) {
     next(err)
   }

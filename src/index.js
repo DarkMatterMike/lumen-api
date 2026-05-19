@@ -20,6 +20,7 @@ const gmailRoutes        = require('./routes/gmail')
 const notificationsRoutes = require('./routes/notifications')
 const goalsRoutes         = require('./routes/goals')
 const importRoutes        = require('./routes/import')
+const duplicatesRoutes    = require('./routes/duplicates')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -54,6 +55,7 @@ app.use('/api/gmail',        gmailRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/goals',        goalsRoutes)
 app.use('/api/import',       importRoutes)
+app.use('/api/duplicates',   duplicatesRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })
