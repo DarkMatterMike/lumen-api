@@ -85,11 +85,17 @@ async function buildFinancialContext(userId) {
     [uid]
   )
 
-  // Active pinned plans
+  // Active pinned plans — include direction so AI knows skip vs new cost
   const { rows: activePlans } = await pool.query(
-    "SELECT question, response, amount, created_at FROM plans WHERE user_id=$1 AND status='active' ORDER BY created_at DESC",
+    "SELECT question, response, amount, direction, created_at FROM plans WHERE user_id=$1 AND status='active' ORDER BY created_at DESC",
     [uid]
   )
+  const planImpact   = activePlans.reduce((s, p) => s + Number(p.amount || 0) * Number(p.direction ?? 1), 0)
+  const balAfterPlans = balance - committedBills - planImpact
+  // Upcoming income this cycle
+  const upcomingIncome = recurring.filter(r => r.day_of_month >= todayDay && r.type === 'income')
+  const upcomingIncomeTotal = upcomingIncome.reduce((s, r) => s + Number(r.amount), 0)
+  const balAfterPlansAndIncome = balAfterPlans + upcomingIncomeTotal
 
   // 3-month averages
   const { rows: avgData } = await pool.query(
@@ -127,7 +133,10 @@ async function buildFinancialContext(userId) {
 CURRENT POSITION
 - Checking balance: $${balance.toLocaleString()}
 - After committed bills: $${(balance - committedBills).toLocaleString()}
-- Committed bills remaining this month: $${committedBills.toLocaleString()}
+- Committed bills remaining this cycle: $${committedBills.toLocaleString()}
+- Upcoming income this cycle: +$${upcomingIncomeTotal.toLocaleString()} (${upcomingIncome.map(r => r.name + " $" + Number(r.amount).toLocaleString() + " on day " + r.day_of_month).join(", ") || "none"})
+- True free-to-spend (after bills + income): $${(balance - committedBills + upcomingIncomeTotal).toLocaleString()}
+- After pinned plans too: $${balAfterPlansAndIncome.toLocaleString()}
 - Pressure gauge: ${pressureLabel} (score: ${pressureScore}/100)
 - Net worth across all accounts: $${netWorth.toLocaleString()}
 
@@ -166,8 +175,13 @@ ${recentTx.map(t => `- ${new Date(t.date).toLocaleDateString('en-US',{month:'sho
 - Avg monthly income: $${avgMonthlyIncome.toLocaleString()}
 - Savings rate: ${savingsRate}%
 
-PINNED PLANS (user's stated spending intentions)
-${activePlans.length > 0 ? activePlans.map(p => `- "${p.question}"${p.amount ? ` (~$${p.amount})` : ''} — pinned on ${new Date(p.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}`).join('\n') : '- No active plans'}
+PINNED PLANS (affect the real balance above — factor these into all advice)
+${activePlans.length > 0 ? activePlans.map(p => {
+  const dir = Number(p.direction ?? 1)
+  const type = dir < 0 ? "SKIP/SAVE (frees up money)" : "NEW COST (reduces balance)"
+  return `- [${type}] "${p.question}"${p.amount ? ` — $${p.amount}` : ""}`
+}).join('\n') : '- No active plans'}
+- Net plan impact on balance: ${planImpact >= 0 ? "-" : "+"}$${Math.abs(planImpact).toLocaleString()} (${planImpact < 0 ? "freeing up money" : "new spend"})
 `.trim()
 
   // Phase 4 — append Gmail intelligence if connected
@@ -278,7 +292,7 @@ router.post('/insight', async (req, res, next) => {
     const client = new Anthropic({ apiKey: anthropicKey })
     const response = await client.messages.create({
       model:      'claude-sonnet-4-6',
-      max_tokens: 80,
+      max_tokens: 60,
       system: `You are Lumen. One sentence. That's it. No more.
 
 You have a personality: dry wit when things are fine, quiet urgency when they're not, genuine warmth when something's actually good. You sound like a smart friend who noticed something — not a financial advisor filing a report.

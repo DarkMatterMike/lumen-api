@@ -92,23 +92,44 @@ function extractAmount(text) {
  * Parse a date from email content, fallback to message internalDate.
  */
 function extractDate(text, internalDate) {
-  // Try common date patterns in email body
-  const patterns = [
-    /(\w+ \d{1,2},?\s?\d{4})/,           // January 15, 2025
-    /(\d{1,2}\/\d{1,2}\/\d{4})/,         // 01/15/2025
-    /(\d{4}-\d{2}-\d{2})/,               // 2025-01-15
-  ]
-  for (const p of patterns) {
-    const m = text.match(p)
-    if (m) {
-      const d = new Date(m[1])
-      if (!isNaN(d)) return d.toISOString().split('T')[0]
-    }
+  // Sanity check — only accept dates within a reasonable window
+  const now      = new Date()
+  const minYear  = now.getFullYear() - 2
+  const maxYear  = now.getFullYear() + 2
+
+  function validDate(d) {
+    if (isNaN(d)) return false
+    const y = d.getFullYear()
+    return y >= minYear && y <= maxYear
   }
-  // Fallback to email timestamp
+
+  // ISO format — only match 20xx or 19xx years, not zip codes or order numbers
+  const isoMatch = text.match(/(?<![0-9])((?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))(?![0-9])/)
+  if (isoMatch) {
+    const d = new Date(isoMatch[1])
+    if (validDate(d)) return d.toISOString().split('T')[0]
+  }
+
+  // US format: 01/15/2025 — require valid month/day ranges and 20xx/19xx year
+  const usMatch = text.match(/\b((?:0?[1-9]|1[0-2])\/(?:0?[1-9]|[12]\d|3[01])\/(?:19|20)\d{2})\b/)
+  if (usMatch) {
+    const d = new Date(usMatch[1])
+    if (validDate(d)) return d.toISOString().split('T')[0]
+  }
+
+  // Written format: January 15, 2025
+  const writtenMatch = text.match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}\b/i)
+  if (writtenMatch) {
+    const d = new Date(writtenMatch[0])
+    if (validDate(d)) return d.toISOString().split('T')[0]
+  }
+
+  // Fallback to email timestamp — always safe
   if (internalDate) {
-    return new Date(parseInt(internalDate)).toISOString().split('T')[0]
+    const d = new Date(parseInt(internalDate))
+    if (validDate(d)) return d.toISOString().split('T')[0]
   }
+
   return new Date().toISOString().split('T')[0]
 }
 
@@ -209,8 +230,14 @@ function extractBillingCycle(body, subject) {
 }
 
 function extractNextRenewal(body, internalDate) {
-  const text = body.toLowerCase()
-  // Look for "next billing date", "renews on", "next charge"
+  const now     = new Date()
+  const maxYear = now.getFullYear() + 2
+
+  function validFuture(d) {
+    if (isNaN(d)) return false
+    return d > now && d.getFullYear() <= maxYear
+  }
+
   const patterns = [
     /next (?:billing|renewal|charge)[^\d]*(\w+ \d{1,2},?\s?\d{4})/i,
     /renew(?:s|al) on[^\d]*(\w+ \d{1,2},?\s?\d{4})/i,
@@ -222,10 +249,10 @@ function extractNextRenewal(body, internalDate) {
     const m = body.match(p)
     if (m) {
       const d = new Date(m[1])
-      if (!isNaN(d) && d > new Date()) return d.toISOString().split('T')[0]
+      if (validFuture(d)) return d.toISOString().split('T')[0]
     }
   }
-  // Estimate next renewal as ~30 days from email date
+  // Estimate: 30 days from email date
   const base = internalDate ? new Date(parseInt(internalDate)) : new Date()
   base.setDate(base.getDate() + 30)
   return base.toISOString().split('T')[0]
