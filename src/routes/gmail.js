@@ -299,3 +299,125 @@ router.post('/scan/bills', requireAuth, async (req, res, next) => {
     next(err)
   }
 })
+
+// ── Phase 5 endpoints ─────────────────────────────────────────
+const {
+  detectPriceChanges,
+  detectBillSuggestions,
+  detectPendingCharges,
+  findUnsubscribeLink,
+  detectUnusedSubscriptions,
+  runPhase5,
+} = require('./gmail-parser')
+
+// GET /api/gmail/price-changes
+router.get('/price-changes', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM gmail_price_changes WHERE user_id=$1 AND status='new' ORDER BY created_at DESC LIMIT 20",
+      [req.user.id]
+    )
+    res.json({ changes: rows })
+  } catch (err) { next(err) }
+})
+
+// POST /api/gmail/price-changes/:id/seen
+router.patch('/price-changes/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { status } = req.body
+    await pool.query(
+      'UPDATE gmail_price_changes SET status=$1 WHERE id=$2 AND user_id=$3',
+      [status, req.params.id, req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (err) { next(err) }
+})
+
+// GET /api/gmail/bill-suggestions
+router.get('/bill-suggestions', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM gmail_bill_suggestions WHERE user_id=$1 AND status='new' ORDER BY due_date ASC NULLS LAST LIMIT 20",
+      [req.user.id]
+    )
+    res.json({ suggestions: rows })
+  } catch (err) { next(err) }
+})
+
+// PATCH /api/gmail/bill-suggestions/:id — dismiss or mark added
+router.patch('/bill-suggestions/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { status } = req.body
+    await pool.query(
+      'UPDATE gmail_bill_suggestions SET status=$1 WHERE id=$2 AND user_id=$3',
+      [status, req.params.id, req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (err) { next(err) }
+})
+
+// GET /api/gmail/pending-charges
+router.get('/pending-charges', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM gmail_pending_charges WHERE user_id=$1 AND status='pending' ORDER BY order_date DESC LIMIT 20",
+      [req.user.id]
+    )
+    res.json({ pending: rows })
+  } catch (err) { next(err) }
+})
+
+// PATCH /api/gmail/pending-charges/:id — dismiss
+router.patch('/pending-charges/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { status } = req.body
+    await pool.query(
+      'UPDATE gmail_pending_charges SET status=$1 WHERE id=$2 AND user_id=$3',
+      [status, req.params.id, req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (err) { next(err) }
+})
+
+// POST /api/gmail/unsubscribe-link — find unsubscribe URL for a subscription
+router.post('/unsubscribe-link', requireAuth, async (req, res, next) => {
+  try {
+    const { serviceId, serviceName, sender } = req.body
+    const url = await findUnsubscribeLink(req.user.id, serviceName, sender)
+    // Also check if we already stored it
+    if (!url && serviceId) {
+      const { rows } = await pool.query(
+        'SELECT unsubscribe_url FROM gmail_subscriptions WHERE id=$1 AND user_id=$2',
+        [serviceId, req.user.id]
+      )
+      if (rows[0]?.unsubscribe_url) return res.json({ url: rows[0].unsubscribe_url })
+    }
+    res.json({ url })
+  } catch (err) { next(err) }
+})
+
+// GET /api/gmail/unused-subscriptions — subs with no transaction activity
+router.get('/unused-subscriptions', requireAuth, async (req, res, next) => {
+  try {
+    const unused = await detectUnusedSubscriptions(req.user.id)
+    res.json({ unused })
+  } catch (err) { next(err) }
+})
+
+// POST /api/gmail/scan/phase5 — manual trigger for full Phase 5 scan
+router.post('/scan/phase5', requireAuth, async (req, res, next) => {
+  try {
+    await runPhase5(req.user.id)
+    // Return all fresh data
+    const [priceRes, suggestRes, pendingRes] = await Promise.all([
+      pool.query("SELECT * FROM gmail_price_changes WHERE user_id=$1 AND status='new' ORDER BY created_at DESC", [req.user.id]),
+      pool.query("SELECT * FROM gmail_bill_suggestions WHERE user_id=$1 AND status='new' ORDER BY due_date ASC NULLS LAST", [req.user.id]),
+      pool.query("SELECT * FROM gmail_pending_charges WHERE user_id=$1 AND status='pending' ORDER BY order_date DESC", [req.user.id]),
+    ])
+    res.json({
+      priceChanges: priceRes.rows,
+      billSuggestions: suggestRes.rows,
+      pendingCharges: pendingRes.rows,
+    })
+  } catch (err) { next(err) }
+})

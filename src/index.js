@@ -20,7 +20,7 @@ const gmailRoutes        = require('./routes/gmail')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
-const { syncGmailForUser }        = require('./routes/gmail-parser')
+const { syncGmailForUser, runPhase5 } = require('./routes/gmail-parser')
 
 const app = express()
 
@@ -72,6 +72,7 @@ setInterval(async () => {
         await applyRulesToUser(user_id)
         console.log(`[Cron] user ${user_id}: +${added} transactions, rules applied`)
         await syncGmailForUser(user_id).catch(e => console.warn('[Cron Gmail]', e.message))
+        await runPhase5(user_id).catch(e => console.warn('[Cron P5]', e.message))
       }
     }
   } catch (err) {

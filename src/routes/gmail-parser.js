@@ -751,6 +751,358 @@ async function buildGmailContext(userId) {
   }
 }
 
+
+// ══════════════════════════════════════════════════════════════
+// PHASE 5 — DEEP GMAIL INTELLIGENCE
+// ══════════════════════════════════════════════════════════════
+
+// ── 1. Price Change Detection ─────────────────────────────────
+/**
+ * Compare newly scanned subscription amounts against stored amounts.
+ * When a price change is detected, log it and update the stored amount.
+ */
+async function detectPriceChanges(userId) {
+  const { rows: subs } = await pool.query(
+    "SELECT * FROM gmail_subscriptions WHERE user_id=$1 AND status='active' AND amount IS NOT NULL",
+    [userId]
+  )
+
+  const changes = []
+
+  for (const sub of subs) {
+    // Re-scan for this specific service's latest receipt
+    try {
+      const auth  = await getGmailClientForUser(userId)
+      const gmail = google.gmail({ version: 'v1', auth })
+      const messages = await searchMessages(
+        gmail,
+        `from:${sub.sender || sub.service_name} (receipt OR invoice OR billing) newer_than:7d`,
+        3
+      )
+      if (!messages.length) continue
+
+      const msg    = await getMessage(gmail, messages[0].id)
+      const body   = extractBody(msg.payload)
+      const subj   = header(msg, 'subject')
+      const newAmt = extractAmount(body) || extractAmount(subj)
+
+      if (!newAmt) continue
+
+      const oldAmt = Number(sub.amount)
+      const delta  = Math.abs(newAmt - oldAmt)
+
+      // Only flag if change is > $0.50 (ignore rounding noise)
+      if (delta > 0.50) {
+        // Log the price change
+        await pool.query(
+          `INSERT INTO gmail_price_changes
+             (user_id, service_name, old_amount, new_amount, email_subject, status)
+           VALUES ($1,$2,$3,$4,$5,'new')`,
+          [userId, sub.service_name, oldAmt, newAmt, subj]
+        )
+
+        // Update the subscription's stored amount and prev_amount
+        await pool.query(
+          `UPDATE gmail_subscriptions
+           SET prev_amount=$1, amount=$2, updated_at=NOW()
+           WHERE id=$3`,
+          [oldAmt, newAmt, sub.id]
+        )
+
+        changes.push({
+          service: sub.service_name,
+          icon:    sub.icon,
+          oldAmt,
+          newAmt,
+          delta:   newAmt - oldAmt,
+        })
+      }
+    } catch (err) {
+      console.warn(`[Price change] ${sub.service_name}:`, err.message)
+    }
+  }
+
+  return changes
+}
+
+// ── 2. Bill Suggestions ───────────────────────────────────────
+/**
+ * Scan Gmail for payment-due emails from senders not already
+ * in the user's recurring items. Surface as one-tap suggestions.
+ */
+async function detectBillSuggestions(userId) {
+  const auth  = await getGmailClientForUser(userId)
+  const gmail = google.gmail({ version: 'v1', auth })
+
+  // Get existing recurring item names for dedup
+  const { rows: existing } = await pool.query(
+    'SELECT LOWER(name) AS name FROM recurring WHERE user_id=$1 AND active=TRUE',
+    [userId]
+  )
+  const existingNames = new Set(existing.map(r => r.name))
+
+  const queries = [
+    'subject:("payment due" OR "bill ready" OR "amount due" OR "your bill") newer_than:45d',
+    'subject:("past due" OR "payment reminder" OR "final notice") newer_than:45d',
+  ]
+
+  const seen    = new Set()
+  const found   = []
+
+  for (const query of queries) {
+    try {
+      const messages = await searchMessages(gmail, query, 15)
+      for (const stub of messages) {
+        if (seen.has(stub.id)) continue
+        seen.add(stub.id)
+
+        const msg   = await getMessage(gmail, stub.id)
+        const from  = header(msg, 'from')
+        const subj  = header(msg, 'subject')
+        const body  = extractBody(msg.payload).slice(0, 1000)
+
+        // Extract merchant name from sender
+        const domainMatch = from.match(/@([a-zA-Z0-9-]+)\./)
+        const name = domainMatch
+          ? domainMatch[1].charAt(0).toUpperCase() + domainMatch[1].slice(1)
+          : subj.replace(/payment due|bill ready|amount due/gi, '').trim().slice(0, 40)
+
+        if (!name || name.length < 2) continue
+
+        // Skip if already a recurring item
+        if (existingNames.has(name.toLowerCase())) continue
+
+        const amount  = extractAmount(body) || extractAmount(subj)
+        const dueDate = extractDate(body, msg.internalDate)
+        const icon    = getBillIcon(name)
+
+        // Dedup in DB
+        const { rows: dup } = await pool.query(
+          'SELECT id FROM gmail_bill_suggestions WHERE user_id=$1 AND LOWER(name)=$2 AND due_date=$3',
+          [userId, name.toLowerCase(), dueDate]
+        )
+        if (dup.length) continue
+
+        await pool.query(
+          `INSERT INTO gmail_bill_suggestions
+             (user_id, name, amount, due_date, sender, email_subject, icon, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'new')
+           ON CONFLICT (user_id, name, due_date) DO NOTHING`,
+          [userId, name, amount, dueDate, from, subj, icon]
+        )
+        found.push({ name, amount, dueDate, from, subj, icon })
+      }
+    } catch (err) {
+      console.warn('[Bill suggestions]', err.message)
+    }
+  }
+
+  return found
+}
+
+function getBillIcon(name) {
+  const n = name.toLowerCase()
+  if (n.includes('electric') || n.includes('xcel') || n.includes('power')) return '⚡'
+  if (n.includes('water'))    return '💧'
+  if (n.includes('gas'))      return '🔥'
+  if (n.includes('internet') || n.includes('comcast') || n.includes('spectrum')) return '🌐'
+  if (n.includes('phone') || n.includes('verizon') || n.includes('att') || n.includes('tmobile')) return '📱'
+  if (n.includes('insurance')) return '🛡️'
+  if (n.includes('loan') || n.includes('mortgage')) return '🏦'
+  if (n.includes('rent'))     return '🏠'
+  if (n.includes('gym') || n.includes('fitness')) return '🏋️'
+  return '📄'
+}
+
+// ── 3. Pending Charges (Orders before Plaid) ─────────────────
+/**
+ * Orders detected in Gmail that haven't hit the card yet.
+ * Matched against recent transactions by merchant+amount+date window.
+ */
+async function detectPendingCharges(userId) {
+  // Get recent gmail_orders (last 14 days) not yet matched
+  const { rows: orders } = await pool.query(
+    `SELECT o.* FROM gmail_orders o
+     WHERE o.user_id=$1
+       AND o.status='active'
+       AND o.order_date >= CURRENT_DATE - INTERVAL '14 days'
+       AND o.id NOT IN (SELECT gmail_order_id FROM gmail_pending_charges WHERE user_id=$1 AND gmail_order_id IS NOT NULL)
+     ORDER BY o.order_date DESC`,
+    [userId]
+  )
+
+  const pending = []
+
+  for (const order of orders) {
+    // Check if a matching transaction already exists (±3 days, ±$2)
+    const { rows: matched } = await pool.query(
+      `SELECT id FROM transactions
+       WHERE user_id=$1
+         AND ABS(amount + $2) < 2
+         AND date BETWEEN $3::date - INTERVAL '3 days' AND $3::date + INTERVAL '5 days'
+         AND LOWER(name) LIKE '%' || LOWER($4) || '%'
+       LIMIT 1`,
+      [userId, Number(order.amount || 0), order.order_date, order.merchant.slice(0, 10)]
+    )
+
+    if (matched.length) {
+      // Already in Plaid — mark matched
+      await pool.query(
+        `INSERT INTO gmail_pending_charges
+           (user_id, merchant, amount, order_date, email_subject, icon, status, gmail_order_id, transaction_id)
+         VALUES ($1,$2,$3,$4,$5,$6,'matched',$7,$8)
+         ON CONFLICT DO NOTHING`,
+        [userId, order.merchant, order.amount, order.order_date, order.email_subject, order.icon, order.id, matched[0].id]
+      )
+      continue
+    }
+
+    // Not yet in Plaid — log as pending
+    const estimated = new Date(order.order_date)
+    estimated.setDate(estimated.getDate() + 3)  // most charges clear in 1-3 days
+
+    const { rows: existing } = await pool.query(
+      'SELECT id FROM gmail_pending_charges WHERE user_id=$1 AND gmail_order_id=$2',
+      [userId, order.id]
+    )
+    if (existing.length) continue
+
+    await pool.query(
+      `INSERT INTO gmail_pending_charges
+         (user_id, merchant, amount, order_date, expected_charge, email_subject, icon, status, gmail_order_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8)`,
+      [userId, order.merchant, order.amount, order.order_date, estimated.toISOString().split('T')[0], order.email_subject, order.icon, order.id]
+    )
+    pending.push({
+      merchant: order.merchant,
+      amount:   order.amount,
+      orderDate: order.order_date,
+      expectedCharge: estimated.toISOString().split('T')[0],
+      icon: order.icon,
+    })
+  }
+
+  return pending
+}
+
+// ── 4. Unsubscribe Link Finder ────────────────────────────────
+/**
+ * Search Gmail for the most recent email from a subscription's sender
+ * and extract the unsubscribe link.
+ */
+async function findUnsubscribeLink(userId, serviceName, sender) {
+  try {
+    const auth  = await getGmailClientForUser(userId)
+    const gmail = google.gmail({ version: 'v1', auth })
+
+    const query = sender
+      ? `from:${sender} newer_than:90d`
+      : `"${serviceName}" (unsubscribe OR cancel) newer_than:90d`
+
+    const messages = await searchMessages(gmail, query, 5)
+    if (!messages.length) return null
+
+    for (const stub of messages) {
+      const msg  = await getMessage(gmail, stub.id)
+      const body = extractBody(msg.payload)
+      const html = msg.payload?.parts?.find(p => p.mimeType === 'text/html')?.body?.data
+        ? Buffer.from(msg.payload.parts.find(p => p.mimeType === 'text/html').body.data, 'base64').toString('utf-8')
+        : ''
+
+      // Try to extract unsubscribe link from HTML
+      const unsub = html.match(/href=["']([^"']*unsubscribe[^"']*)["']/i)
+        || html.match(/href=["']([^"']*optout[^"']*)["']/i)
+        || html.match(/href=["']([^"']*opt-out[^"']*)["']/i)
+        || html.match(/href=["']([^"']*cancel[^"']*)["']/i)
+
+      if (unsub && unsub[1].startsWith('http')) {
+        // Store it on the subscription record
+        await pool.query(
+          'UPDATE gmail_subscriptions SET unsubscribe_url=$1 WHERE user_id=$2 AND service_name=$3',
+          [unsub[1], userId, serviceName]
+        )
+        return unsub[1]
+      }
+
+      // Fallback: List-Unsubscribe header
+      const listUnsub = header(msg, 'list-unsubscribe')
+      if (listUnsub) {
+        const urlMatch = listUnsub.match(/<(https?:\/\/[^>]+)>/)
+        if (urlMatch) {
+          await pool.query(
+            'UPDATE gmail_subscriptions SET unsubscribe_url=$1 WHERE user_id=$2 AND service_name=$3',
+            [urlMatch[1], userId, serviceName]
+          )
+          return urlMatch[1]
+        }
+      }
+    }
+    return null
+  } catch (err) {
+    console.warn('[Unsubscribe finder]', err.message)
+    return null
+  }
+}
+
+// ── 5. Usage Detection (find unused subscriptions) ────────────
+/**
+ * Cross-reference subscription list against transaction history.
+ * A subscription is "unused" if there are no transactions with
+ * that merchant name in the last 60 days despite auto-renewal.
+ */
+async function detectUnusedSubscriptions(userId) {
+  const { rows: subs } = await pool.query(
+    "SELECT * FROM gmail_subscriptions WHERE user_id=$1 AND status='active'",
+    [userId]
+  )
+
+  const unused = []
+
+  for (const sub of subs) {
+    const { rows: txs } = await pool.query(
+      `SELECT id FROM transactions
+       WHERE user_id=$1
+         AND date >= CURRENT_DATE - INTERVAL '60 days'
+         AND LOWER(name) LIKE '%' || LOWER($2) || '%'
+       LIMIT 1`,
+      [userId, sub.service_name.split(' ')[0]]  // first word of service name
+    )
+
+    if (!txs.length) {
+      unused.push({
+        id:          sub.id,
+        service:     sub.service_name,
+        icon:        sub.icon,
+        amount:      sub.amount,
+        cycle:       sub.billing_cycle,
+        nextRenewal: sub.next_renewal,
+        unsubUrl:    sub.unsubscribe_url,
+      })
+    }
+  }
+
+  return unused
+}
+
+// ── Master Phase 5 sync ───────────────────────────────────────
+async function runPhase5(userId) {
+  const { rows: gmailRows } = await pool.query(
+    'SELECT id FROM gmail_tokens WHERE user_id=$1', [userId]
+  )
+  if (!gmailRows.length) return
+
+  try {
+    const [priceChanges, billSuggestions, pendingCharges] = await Promise.allSettled([
+      detectPriceChanges(userId),
+      detectBillSuggestions(userId),
+      detectPendingCharges(userId),
+    ])
+    console.log(`[Gmail P5] user ${userId}: ${priceChanges.value?.length || 0} price changes, ${billSuggestions.value?.length || 0} bill suggestions, ${pendingCharges.value?.length || 0} pending`)
+  } catch (err) {
+    console.error('[Gmail P5 error]', err.message)
+  }
+}
+
 module.exports = {
   scanSubscriptions,
   scanOrders,
@@ -758,4 +1110,11 @@ module.exports = {
   syncGmailForUser,
   enrichNewTransactions,
   buildGmailContext,
+  // Phase 5
+  detectPriceChanges,
+  detectBillSuggestions,
+  detectPendingCharges,
+  findUnsubscribeLink,
+  detectUnusedSubscriptions,
+  runPhase5,
 }
