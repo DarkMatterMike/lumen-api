@@ -292,7 +292,7 @@ router.post('/insight', async (req, res, next) => {
     const client = new Anthropic({ apiKey: anthropicKey })
     const response = await client.messages.create({
       model:      'claude-sonnet-4-6',
-      max_tokens: 60,
+      max_tokens: 120,
       system: `You are Lumen. One sentence. That's it. No more.
 
 You have a personality: dry wit when things are fine, quiet urgency when they're not, genuine warmth when something's actually good. You sound like a smart friend who noticed something — not a financial advisor filing a report.
