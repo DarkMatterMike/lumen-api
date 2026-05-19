@@ -47,7 +47,13 @@ router.get('/', async (req, res, next) => {
       .filter(r => r.type !== 'income')
       .reduce((s, r) => s + Number(r.amount), 0)
 
-    res.json({ recurring, expanded, upcoming, remainingBills, nextPaycheck: upcoming.find(r => r.type === 'income') || null })
+    // Accounts for allocation breakdown
+    const { rows: accounts } = await pool.query(
+      "SELECT name, type, balance, mask FROM accounts WHERE user_id=$1 AND is_debt=FALSE ORDER BY balance DESC LIMIT 6",
+      [uid]
+    )
+
+    res.json({ recurring, expanded, upcoming, remainingBills, nextPaycheck: upcoming.find(r => r.type === 'income') || null, accounts })
   } catch (err) {
     next(err)
   }
