@@ -27,10 +27,19 @@ async function buildFinancialContext(userId) {
   // Dashboard summary
   const today    = new Date()
   const todayDay = today.getDate()
-  const { rows: checking } = await pool.query(
-    "SELECT balance FROM accounts WHERE user_id=$1 AND type='checking' LIMIT 1", [uid]
+
+  // Use all include_in_balance=TRUE accounts (same as dashboard) — not just first checking
+  const { rows: toggledAccounts } = await pool.query(
+    'SELECT name, type, balance, mask FROM accounts WHERE user_id=$1 AND include_in_balance=TRUE AND is_debt=FALSE ORDER BY balance DESC',
+    [uid]
   )
-  const balance = checking.length ? Number(checking[0].balance) : 0
+  // Fallback: if none toggled, use all non-debt liquid accounts
+  const { rows: fallbackAccounts } = toggledAccounts.length ? { rows: [] } : await pool.query(
+    "SELECT name, type, balance, mask FROM accounts WHERE user_id=$1 AND is_debt=FALSE AND type IN ('checking','savings') ORDER BY balance DESC",
+    [uid]
+  )
+  const liquidAccounts = toggledAccounts.length ? toggledAccounts : fallbackAccounts
+  const balance = liquidAccounts.reduce((s, a) => s + Number(a.balance), 0)
 
   // Upcoming bills
   const { rows: recurring } = await pool.query(
@@ -131,7 +140,8 @@ async function buildFinancialContext(userId) {
 === LUMEN FINANCIAL SNAPSHOT — ${today.toDateString()} ===
 
 CURRENT POSITION
-- Checking balance: $${balance.toLocaleString()}
+- Total liquid balance (toggled accounts): $${balance.toLocaleString()}
+  (${liquidAccounts.map(a => a.name + (a.mask ? ' ····' + a.mask : '') + ': $' + Number(a.balance).toLocaleString()).join(' | ')})
 - After committed bills: $${(balance - committedBills).toLocaleString()}
 - Committed bills remaining this cycle: $${committedBills.toLocaleString()}
 - Upcoming income this cycle: +$${upcomingIncomeTotal.toLocaleString()} (${upcomingIncome.map(r => r.name + " $" + Number(r.amount).toLocaleString() + " on day " + r.day_of_month).join(", ") || "none"})
