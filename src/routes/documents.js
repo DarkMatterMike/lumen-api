@@ -64,7 +64,7 @@ function parseDate(str) {
 async function detectDocType(text, filename, apiKey) {
   const client = new Anthropic({ apiKey })
   const res = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-4-5',
     max_tokens: 50,
     messages: [{
       role: 'user',
@@ -123,7 +123,7 @@ async function parseBankStatement(req, res, next) {
     const textChunk = docText.slice(0, 12000)
 
     const extraction = await client.messages.create({
-      model:      'claude-sonnet-4-5-20251001',
+      model:      'claude-sonnet-4-5',
       max_tokens: 4000,
       messages: [{
         role: 'user',
@@ -237,7 +237,7 @@ async function parsePayStub(req, res, next) {
     const client = new Anthropic({ apiKey })
 
     const extraction = await client.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+      model:      'claude-haiku-4-5',
       max_tokens: 800,
       messages: [{
         role: 'user',
@@ -338,7 +338,7 @@ async function parseLoanDoc(req, res, next) {
     const client = new Anthropic({ apiKey })
 
     const extraction = await client.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+      model:      'claude-haiku-4-5',
       max_tokens: 600,
       messages: [{
         role: 'user',
@@ -408,7 +408,7 @@ async function parseGeneric(req, res, next) {
     const client = new Anthropic({ apiKey })
 
     const extraction = await client.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+      model:      'claude-haiku-4-5',
       max_tokens: 500,
       messages: [{
         role: 'user',
@@ -495,7 +495,7 @@ router.get('/tax-summary', async (req, res, next) => {
       .join(', ')
 
     const aiRes = await client.messages.create({
-      model:      'claude-haiku-4-5-20251001',
+      model:      'claude-haiku-4-5',
       max_tokens: 300,
       messages: [{
         role: 'user',

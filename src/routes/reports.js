@@ -132,7 +132,7 @@ router.get('/monthly', requireAuth, async (req, res, next) => {
     if (apiKey) {
       const client = new Anthropic({ apiKey })
       const res2 = await client.messages.create({
-        model:      'claude-haiku-4-5-20251001',
+        model:      'claude-haiku-4-5',
         max_tokens: 350,
         messages: [{
           role: 'user',
@@ -220,7 +220,7 @@ async function generateReportData(userId, year, month) {
   if (apiKey) {
     const client = new Anthropic({ apiKey })
     const ai = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001', max_tokens: 300,
+      model: 'claude-haiku-4-5', max_tokens: 300,
       messages: [{ role: 'user', content: `3-4 sentence honest monthly summary. Specific numbers. Most important thing. Don't moralize.\nMonth: ${monthName}\nIncome: $${reportData.total_income}, Expenses: $${reportData.total_expenses}, Net: $${reportData.net_savings} (${savingsRate}% saved)\nTop spend: ${reportData.by_category[0]?.name} $${reportData.by_category[0]?.total}` }]
     })
     reportData.narrative = ai.content[0].text.trim()

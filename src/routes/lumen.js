@@ -258,7 +258,7 @@ Always speak as Lumen. First person. Reference their specific numbers. Never sta
     const client = new Anthropic({ apiKey: anthropicKey })
 
     const stream = client.messages.stream({
-      model:      'claude-sonnet-4-5-20251001',
+      model:      'claude-sonnet-4-5',
       max_tokens: 1024,
       system:     systemPrompt,
       messages:   [{ role: 'user', content: message }],
@@ -301,7 +301,7 @@ router.post('/insight', async (req, res, next) => {
 
     const client = new Anthropic({ apiKey: anthropicKey })
     const response = await client.messages.create({
-      model:      'claude-sonnet-4-5-20251001',
+      model:      'claude-sonnet-4-5',
       max_tokens: 120,
       system: `You are Lumen. One sentence. That's it. No more.
 
@@ -349,7 +349,7 @@ router.post('/suggest-categories', async (req, res, next) => {
     const txNames = txs.map(t => t.name).join(', ')
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5-20251001', max_tokens: 800,
+      model: 'claude-sonnet-4-5', max_tokens: 800,
       messages: [{ role: 'user', content: `Based on these transaction names from a user's bank account, suggest 6-8 practical budget categories for a personal finance app.\n\nTransactions: ${txNames}\n\nReturn ONLY a JSON array, no markdown, no explanation:\n[{"name":"Groceries","icon":"🛒","color":"safe"},...]\n\nColor options: safe (green), calm (blue), goal (purple), warn (amber), debt (red), pink, orange, sky, lime, gold\nUse common personal finance category names (1-2 words), pick icons that match.` }],
     })
 
@@ -390,7 +390,7 @@ router.post('/categorize', async (req, res, next) => {
     const txList       = needsTag.slice(0, 120).map(tx => `${tx.id}: ${tx.name}`).join('\n')
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5-20251001', max_tokens: 2500,
+      model: 'claude-sonnet-4-5', max_tokens: 2500,
       messages: [{ role: 'user', content: `Categorize these financial transactions into the provided budget categories.\n\nBudget categories: ${categoryList}\n\nTransactions (id: merchant name):\n${txList}\n\nReturn ONLY a JSON array, no markdown:\n[{"id":123,"category":"Groceries"},...]\n\nRules:\n- Use exact category names from the list\n- Set category to null if no category fits\n- Same merchant = same category always` }],
     })
 
@@ -445,7 +445,7 @@ router.post('/budget-limits', async (req, res, next) => {
     ).join('\n')
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5-20251001', max_tokens: 1500,
+      model: 'claude-sonnet-4-5', max_tokens: 1500,
       messages: [{ role: 'user', content: `Analyze this 6-month spending history and suggest optimal monthly budget caps.\n\n${dataStr}\n\nReturn ONLY a JSON array, no markdown:\n[{"id":1,"name":"Groceries","suggested_cap":350,"reasoning":"One sentence with specific numbers."},...]\n\nRules:\n- If avg > current cap: suggest higher cap\n- If avg < current cap × 0.6: suggest lower cap\n- Round all suggested_caps to nearest $25\n- One sentence reasoning with specific numbers` }],
     })
 
@@ -506,7 +506,7 @@ router.post('/query', async (req, res, next) => {
     // First pass: AI converts natural language → SQL parameters
     const client = new Anthropic({ apiKey: anthropicKey })
     const parseRes = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5',
       max_tokens: 300,
       messages: [{
         role: 'user',
@@ -613,7 +613,7 @@ Examples:
     // Second pass: AI formats a clean natural language answer
     const financialContext = `Query: "${message}"\nData: ${summary}\nRows: ${JSON.stringify(rows.slice(0, 15))}`
     const answerRes = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5',
       max_tokens: 150,
       messages: [{
         role: 'user',
@@ -645,7 +645,7 @@ router.post('/purchase-decision', async (req, res, next) => {
     const client = new Anthropic({ apiKey: anthropicKey })
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5-20251001',
+      model: 'claude-sonnet-4-5',
       max_tokens: 400,
       messages: [{
         role: 'user',
@@ -698,7 +698,7 @@ router.post('/goal-plan', async (req, res, next) => {
     // Parse goal from natural language + financial context
     const today = new Date().toISOString().slice(0, 10)
     const parseRes = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5',
       max_tokens: 300,
       messages: [{
         role: 'user',
@@ -773,7 +773,7 @@ router.post('/scenario', async (req, res, next) => {
     const client = new Anthropic({ apiKey: anthropicKey })
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5-20251001',
+      model: 'claude-sonnet-4-5',
       max_tokens: 600,
       messages: [{
         role: 'user',
