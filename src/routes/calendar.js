@@ -3,6 +3,7 @@ const router      = express.Router()
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 const { getOccurrencesForMonth } = require('../db/recurringUtils')
+const { detectRecurringCandidates, addRecurringFromDetection } = require('../utils/recurringDetection')
 
 router.use(requireAuth)
 
@@ -186,6 +187,33 @@ router.get('/', async (req, res, next) => {
   } catch (err) {
     next(err)
   }
+})
+
+
+// GET /api/calendar/detect — suggest recurring items from transaction history
+router.get('/detect', async (req, res, next) => {
+  try {
+    const candidates = await detectRecurringCandidates(req.user.id)
+    res.json({ candidates })
+  } catch (err) { next(err) }
+})
+
+// POST /api/calendar/detect/add — add a detected candidate as a recurring item
+router.post('/detect/add', async (req, res, next) => {
+  try {
+    const item = await addRecurringFromDetection(req.user.id, req.body)
+    if (!item) return res.status(409).json({ error: 'Already exists' })
+    res.status(201).json(item)
+  } catch (err) { next(err) }
+})
+
+// POST /api/calendar/detect/dismiss — mark candidate as dismissed (store in a simple key)
+router.post('/detect/dismiss', async (req, res, next) => {
+  try {
+    const { merchant } = req.body
+    // Store dismissed suggestions in user metadata or just ignore — client can filter
+    res.json({ ok: true, dismissed: merchant })
+  } catch (err) { next(err) }
 })
 
 module.exports = router

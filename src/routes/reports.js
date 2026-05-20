@@ -414,4 +414,82 @@ function buildReportHtml(d) {
 </html>`
 }
 
+
+// GET /api/reports/export/csv?start=YYYY-MM-DD&end=YYYY-MM-DD — download transactions as CSV
+router.get('/export/csv', requireAuth, async (req, res, next) => {
+  try {
+    const today = new Date()
+    const start = req.query.start || `${today.getFullYear()}-01-01`
+    const end   = req.query.end   || today.toISOString().split('T')[0]
+
+    const { rows } = await pool.query(
+      `SELECT
+         t.date,
+         COALESCE(t.cleaned_name, t.name) AS name,
+         t.name AS raw_name,
+         t.amount,
+         t.category,
+         COALESCE(t.tx_type, 'expense') AS type,
+         a.name AS account,
+         t.note,
+         t.status,
+         t.source
+       FROM transactions t
+       LEFT JOIN accounts a ON a.id = t.account_id
+       WHERE t.user_id = $1
+         AND t.date BETWEEN $2 AND $3
+         AND COALESCE(t.tx_type, 'expense') != 'transfer'
+       ORDER BY t.date DESC`,
+      [req.user.id, start, end]
+    )
+
+    // Build CSV
+    const headers = ['Date', 'Name', 'Raw Name', 'Amount', 'Category', 'Type', 'Account', 'Note', 'Status', 'Source']
+    const escape  = v => v == null ? '' : `"${String(v).replace(/"/g, '""')}"`
+    const lines   = [
+      headers.join(','),
+      ...rows.map(r => [
+        r.date, r.name, r.raw_name,
+        r.amount, r.category, r.type,
+        r.account, r.note, r.status, r.source,
+      ].map(escape).join(','))
+    ]
+
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', `attachment; filename="lumen-transactions-${start}-to-${end}.csv"`)
+    res.send(lines.join('\n'))
+  } catch (err) { next(err) }
+})
+
+// GET /api/reports/export/json?start=YYYY-MM-DD&end=YYYY-MM-DD — download as JSON
+router.get('/export/json', requireAuth, async (req, res, next) => {
+  try {
+    const today = new Date()
+    const start = req.query.start || `${today.getFullYear()}-01-01`
+    const end   = req.query.end   || today.toISOString().split('T')[0]
+
+    const [txRes, acctRes, budgetRes] = await Promise.all([
+      pool.query(
+        `SELECT t.*, COALESCE(t.cleaned_name, t.name) AS display_name, a.name AS account_name
+         FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id
+         WHERE t.user_id=$1 AND t.date BETWEEN $2 AND $3
+         ORDER BY t.date DESC`,
+        [req.user.id, start, end]
+      ),
+      pool.query('SELECT id, name, type, balance, is_debt, institution FROM accounts WHERE user_id=$1', [req.user.id]),
+      pool.query('SELECT id, name, cap, icon FROM budgets WHERE user_id=$1', [req.user.id]),
+    ])
+
+    res.setHeader('Content-Disposition', `attachment; filename="lumen-export-${start}-to-${end}.json"`)
+    res.json({
+      exported_at:  new Date().toISOString(),
+      date_range:   { start, end },
+      transactions: txRes.rows,
+      accounts:     acctRes.rows,
+      budgets:      budgetRes.rows,
+    })
+  } catch (err) { next(err) }
+})
+
+
 module.exports = router
