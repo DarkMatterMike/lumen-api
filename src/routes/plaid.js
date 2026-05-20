@@ -10,6 +10,7 @@ const {
   detectDuplicates,
   detectRecurringAmountChanges,
 } = require('../utils/transactionIntelligence')
+const { checkForMergeCandidates } = require('../utils/bankAlertParser')
 
 // All Plaid routes require auth
 router.use(requireAuth)
@@ -159,8 +160,8 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
 
       const { rows: inserted } = await pool.query(
         `INSERT INTO transactions
-           (user_id, account_id, plaid_transaction_id, name, cleaned_name, amount, category, icon, date, source)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'plaid')
+           (user_id, account_id, plaid_transaction_id, name, cleaned_name, amount, category, icon, date, source, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'plaid','posted')
          ON CONFLICT (plaid_transaction_id) DO NOTHING
          RETURNING id`,
         [userId, accountId, tx.transaction_id, tx.name, cleanedName !== tx.name ? cleanedName : null,
@@ -213,6 +214,11 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
     )
     detectRecurringAmountChanges(userId, newTxIds).catch(e =>
       console.warn('[Phase B] Recurring change detection error:', e.message)
+    )
+
+    // Check new posted txs against pending email-alert transactions
+    checkForMergeCandidates(userId, newTxIds).catch(e =>
+      console.warn('[Merge] Candidate detection error:', e.message)
     )
   }
 
