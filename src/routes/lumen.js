@@ -487,3 +487,327 @@ router.post('/enrich', async (req, res, next) => {
     res.json({ enriched, total: txs.length })
   } catch (err) { next(err) }
 })
+
+// ── Phase F: Conversational Upgrades ─────────────────────────────────────────
+
+// POST /api/lumen/query — natural language data query
+// "How much did I spend on coffee in 90 days?" → real SQL answer, not AI guessing
+router.post('/query', async (req, res, next) => {
+  try {
+    const { message } = req.body
+    if (!message) return res.status(400).json({ error: 'message required' })
+
+    const { rows: keyRow } = await pool.query('SELECT anthropic_key FROM users WHERE id=$1', [req.user.id])
+    const anthropicKey = keyRow[0]?.anthropic_key
+    if (!anthropicKey) return res.status(402).json({ error: 'NO_KEY' })
+
+    const uid = req.user.id
+
+    // First pass: AI converts natural language → SQL parameters
+    const client = new Anthropic({ apiKey: anthropicKey })
+    const parseRes = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `Convert this financial query into JSON parameters for a database lookup.
+Query: "${message}"
+
+Return ONLY valid JSON, no markdown:
+{
+  "type": "spending_by_merchant" | "spending_by_category" | "spending_total" | "income_total" | "transaction_list" | "last_payment",
+  "merchant": "string or null",
+  "category": "string or null",
+  "days": number (default 30),
+  "limit": number (default 10)
+}
+
+Examples:
+"how much on coffee last 90 days" → {"type":"spending_by_merchant","merchant":"coffee","category":null,"days":90,"limit":10}
+"show amazon charges last month" → {"type":"transaction_list","merchant":"amazon","category":null,"days":30,"limit":20}
+"when did I last pay rent" → {"type":"last_payment","merchant":"rent","category":null,"days":365,"limit":1}
+"total dining this month" → {"type":"spending_by_category","merchant":null,"category":"Dining","days":30,"limit":10}`
+      }]
+    })
+
+    let params = { type: 'spending_total', days: 30, limit: 10 }
+    try {
+      const text = parseRes.content[0].text.trim().replace(/```json\n?|\n?```/g, '')
+      params = JSON.parse(text)
+    } catch { /* use defaults */ }
+
+    const since = `CURRENT_DATE - INTERVAL '${Math.min(params.days || 30, 365)} days'`
+    let rows = [], summary = ''
+
+    if (params.type === 'spending_by_merchant' && params.merchant) {
+      const { rows: r } = await pool.query(
+        `SELECT COALESCE(cleaned_name, name) AS merchant, COUNT(*) AS visits,
+                SUM(ABS(amount)) AS total, AVG(ABS(amount)) AS avg_per_visit
+         FROM transactions
+         WHERE user_id=$1 AND amount < 0
+           AND LOWER(COALESCE(cleaned_name, name)) LIKE $2
+           AND date >= ${since}
+         GROUP BY COALESCE(cleaned_name, name)
+         ORDER BY total DESC LIMIT $3`,
+        [uid, `%${params.merchant.toLowerCase()}%`, params.limit || 10]
+      )
+      rows = r
+      const total = r.reduce((s, x) => s + Number(x.total), 0)
+      summary = `Found ${r.length} merchant(s) matching "${params.merchant}" in last ${params.days} days. Total: $${total.toFixed(2)}.`
+    } else if (params.type === 'spending_by_category' && params.category) {
+      const { rows: r } = await pool.query(
+        `SELECT category, COUNT(*) AS count, SUM(ABS(amount)) AS total
+         FROM transactions
+         WHERE user_id=$1 AND amount < 0
+           AND LOWER(category) LIKE $2
+           AND date >= ${since}
+         GROUP BY category ORDER BY total DESC`,
+        [uid, `%${params.category.toLowerCase()}%`]
+      )
+      rows = r
+      const total = r.reduce((s, x) => s + Number(x.total), 0)
+      summary = `${params.category} spending over last ${params.days} days: $${total.toFixed(2)} across ${r.length} categories.`
+    } else if (params.type === 'transaction_list') {
+      const whereClauses = ['user_id=$1', `date >= ${since}`]
+      const queryParams = [uid]
+      if (params.merchant) {
+        queryParams.push(`%${params.merchant.toLowerCase()}%`)
+        whereClauses.push(`LOWER(COALESCE(cleaned_name, name)) LIKE $${queryParams.length}`)
+      }
+      if (params.category) {
+        queryParams.push(`%${params.category.toLowerCase()}%`)
+        whereClauses.push(`LOWER(category) LIKE $${queryParams.length}`)
+      }
+      queryParams.push(params.limit || 20)
+      const { rows: r } = await pool.query(
+        `SELECT COALESCE(cleaned_name, name) AS name, amount, date, category
+         FROM transactions WHERE ${whereClauses.join(' AND ')}
+         ORDER BY date DESC LIMIT $${queryParams.length}`,
+        queryParams
+      )
+      rows = r
+      summary = `Found ${r.length} transactions.`
+    } else if (params.type === 'last_payment') {
+      const { rows: r } = await pool.query(
+        `SELECT COALESCE(cleaned_name, name) AS name, amount, date, category
+         FROM transactions
+         WHERE user_id=$1 AND amount < 0
+           AND LOWER(COALESCE(cleaned_name, name)) LIKE $2
+           AND date >= ${since}
+         ORDER BY date DESC LIMIT 1`,
+        [uid, `%${(params.merchant || '').toLowerCase()}%`]
+      )
+      rows = r
+      summary = r.length ? `Last "${params.merchant}" payment: $${Math.abs(Number(r[0].amount)).toFixed(2)} on ${r[0].date}.` : `No "${params.merchant}" payments found in last ${params.days} days.`
+    } else {
+      // Generic total
+      const { rows: r } = await pool.query(
+        `SELECT SUM(ABS(amount)) AS total, COUNT(*) AS count
+         FROM transactions WHERE user_id=$1 AND amount < 0 AND date >= ${since}`,
+        [uid]
+      )
+      rows = r
+      summary = `Total spending last ${params.days} days: $${Number(r[0]?.total || 0).toFixed(2)} across ${r[0]?.count || 0} transactions.`
+    }
+
+    // Second pass: AI formats a clean natural language answer
+    const financialContext = `Query: "${message}"\nData: ${summary}\nRows: ${JSON.stringify(rows.slice(0, 15))}`
+    const answerRes = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 150,
+      messages: [{
+        role: 'user',
+        content: `You are Lumen, a personal finance AI. Answer this user query in 1-2 sentences using the real data below. Be specific with numbers. Don't start with "I".\n\n${financialContext}`
+      }]
+    })
+
+    res.json({
+      answer: answerRes.content[0].text.trim(),
+      data:   rows.slice(0, 20),
+      params,
+      summary,
+    })
+  } catch (err) { next(err) }
+})
+
+// POST /api/lumen/purchase-decision — "Can I afford X?"
+// Returns a structured verdict with full context
+router.post('/purchase-decision', async (req, res, next) => {
+  try {
+    const { item, amount, category } = req.body
+    if (!item || !amount) return res.status(400).json({ error: 'item and amount required' })
+
+    const { rows: keyRow } = await pool.query('SELECT anthropic_key FROM users WHERE id=$1', [req.user.id])
+    const anthropicKey = keyRow[0]?.anthropic_key
+    if (!anthropicKey) return res.status(402).json({ error: 'NO_KEY' })
+
+    const financialContext = await buildFinancialContext(req.user.id)
+    const client = new Anthropic({ apiKey: anthropicKey })
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 400,
+      messages: [{
+        role: 'user',
+        content: `The user wants to buy: "${item}" for $${amount}${category ? ` (${category})` : ''}.
+
+Using ONLY their real financial data below, give a purchase decision. Return ONLY valid JSON:
+{
+  "verdict": "yes" | "yes_but" | "wait" | "no",
+  "headline": "One punchy sentence verdict",
+  "reasoning": "2-3 sentences with specific numbers — their balance, upcoming bills, what this costs relative to their situation",
+  "alternative": "One concrete alternative or timing suggestion, or null"
+}
+
+Verdict guide:
+- "yes": they can clearly afford it, minimal impact
+- "yes_but": they can afford it but there's a real caveat (tight month, big bill coming, etc.)
+- "wait": better to wait (payday close, crunch coming, better timing exists)
+- "no": genuinely can't afford it right now — would cause real strain
+
+Be honest. Use their actual numbers. Don't be a pushover — if it's a bad idea, say so.
+
+FINANCIAL DATA:
+${financialContext}`
+      }]
+    })
+
+    let decision = { verdict: 'yes_but', headline: 'Looks manageable, but check the timing.', reasoning: '', alternative: null }
+    try {
+      const text = response.content[0].text.trim().replace(/```json\n?|\n?```/g, '')
+      decision = JSON.parse(text)
+    } catch { /* use defaults */ }
+
+    res.json({ item, amount, ...decision })
+  } catch (err) { next(err) }
+})
+
+// POST /api/lumen/goal-plan — "I want to save $X by [date]" → creates goal + monthly target
+router.post('/goal-plan', async (req, res, next) => {
+  try {
+    const { message } = req.body
+    if (!message) return res.status(400).json({ error: 'message required' })
+
+    const { rows: keyRow } = await pool.query('SELECT anthropic_key FROM users WHERE id=$1', [req.user.id])
+    const anthropicKey = keyRow[0]?.anthropic_key
+    if (!anthropicKey) return res.status(402).json({ error: 'NO_KEY' })
+
+    const financialContext = await buildFinancialContext(req.user.id)
+    const client = new Anthropic({ apiKey: anthropicKey })
+
+    // Parse goal from natural language + financial context
+    const today = new Date().toISOString().slice(0, 10)
+    const parseRes = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `Today is ${today}. Parse this savings goal and return ONLY valid JSON:
+
+Message: "${message}"
+
+{
+  "name": "Short goal name (3-5 words)",
+  "target_amount": number,
+  "target_date": "YYYY-MM-DD or null",
+  "monthly_contribution": number (how much/month needed, or null if can't determine),
+  "icon": "single relevant emoji",
+  "type": "savings" | "emergency_fund" | "debt_payoff" | "purchase" | "investment" | "other",
+  "feasibility": "easy" | "stretch" | "aggressive" | "not_feasible",
+  "months_needed": number or null,
+  "summary": "One sentence — what this goal is and what it costs monthly to achieve it by the target date"
+}
+
+Use their savings rate context if available. If no date given, assume 12 months. Round monthly_contribution to nearest $5.
+
+Financial context (savings rate etc):
+${financialContext.split('\n').slice(0, 15).join('\n')}`
+      }]
+    })
+
+    let plan = null
+    try {
+      const text = parseRes.content[0].text.trim().replace(/```json\n?|\n?```/g, '')
+      plan = JSON.parse(text)
+    } catch {
+      return res.status(400).json({ error: 'Could not parse goal from message. Try: "Save $5000 by December"' })
+    }
+
+    // Create the goal in the DB
+    const { rows: goalRows } = await pool.query(
+      `INSERT INTO goals (user_id, name, type, target_amount, current_amount, monthly_contribution, target_date, icon, color, notes)
+       VALUES ($1,$2,$3,$4,0,$5,$6,$7,'calm',$8) RETURNING *`,
+      [
+        req.user.id,
+        plan.name,
+        plan.type || 'savings',
+        plan.target_amount,
+        plan.monthly_contribution || null,
+        plan.target_date || null,
+        plan.icon || '🎯',
+        `Created via Lumen chat: "${message}"`,
+      ]
+    )
+
+    res.json({
+      goal:    goalRows[0],
+      plan,
+      created: true,
+      message: plan.summary,
+    })
+  } catch (err) { next(err) }
+})
+
+// POST /api/lumen/scenario — dedicated scenario modeling
+// Handles: loan refinance, savings timeline, spending floor, payoff date
+router.post('/scenario', async (req, res, next) => {
+  try {
+    const { message } = req.body
+    if (!message) return res.status(400).json({ error: 'message required' })
+
+    const { rows: keyRow } = await pool.query('SELECT anthropic_key FROM users WHERE id=$1', [req.user.id])
+    const anthropicKey = keyRow[0]?.anthropic_key
+    if (!anthropicKey) return res.status(402).json({ error: 'NO_KEY' })
+
+    const financialContext = await buildFinancialContext(req.user.id)
+    const client = new Anthropic({ apiKey: anthropicKey })
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 600,
+      messages: [{
+        role: 'user',
+        content: `The user has a financial scenario question. Use their real data to model it precisely.
+
+Question: "${message}"
+
+Return ONLY valid JSON:
+{
+  "scenario_type": "loan_refinance" | "savings_timeline" | "spending_floor" | "debt_payoff" | "general",
+  "headline": "The key number or finding in one phrase",
+  "breakdown": [
+    {"label": "string", "value": "string", "highlight": true/false}
+  ],
+  "verdict": "2-3 sentences explaining the answer with specific numbers",
+  "caveat": "One caveat or important assumption, or null"
+}
+
+Be mathematically precise. Use their actual balance, income, spending rate.
+
+FINANCIAL DATA:
+${financialContext}`
+      }]
+    })
+
+    let scenario = null
+    try {
+      const text = response.content[0].text.trim().replace(/```json\n?|\n?```/g, '')
+      scenario = JSON.parse(text)
+    } catch {
+      // Fallback: return as plain text answer
+      return res.json({ scenario_type: 'general', verdict: response.content[0].text.trim(), breakdown: [] })
+    }
+
+    res.json(scenario)
+  } catch (err) { next(err) }
+})

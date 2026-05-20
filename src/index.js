@@ -22,6 +22,7 @@ const goalsRoutes         = require('./routes/goals')
 const importRoutes        = require('./routes/import')
 const duplicatesRoutes    = require('./routes/duplicates')
 const forecastRoutes      = require('./routes/forecast')
+const debtRoutes          = require('./routes/debt')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -29,6 +30,7 @@ const { syncGmailForUser, runPhase5 } = require('./routes/gmail-parser')
 const { checkPaceAlerts, autoCompleteCategories } = require('./utils/budgetIntelligence')
 const { runCashFlowAlerts }      = require('./utils/cashFlowForecast')
 const { runAllProactiveAlerts }   = require('./utils/proactiveAlerts')
+const { detectPayoffOpportunities } = require('./utils/debtStrategy')
 
 const app = express()
 
@@ -61,6 +63,7 @@ app.use('/api/goals',        goalsRoutes)
 app.use('/api/import',       importRoutes)
 app.use('/api/duplicates',   duplicatesRoutes)
 app.use('/api/forecast',     forecastRoutes)
+app.use('/api/debt',         debtRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })
@@ -100,6 +103,9 @@ setInterval(async () => {
 
       // Phase E — proactive alerts (anomaly, patterns, subscriptions, double billing)
       await runAllProactiveAlerts(user_id).catch(e => console.warn('[Cron ProactiveAlerts]', e.message))
+
+      // Phase G — debt payoff opportunity detection
+      await detectPayoffOpportunities(user_id).catch(e => console.warn('[Cron DebtOpps]', e.message))
     }
   } catch (err) {
     console.error('[Cron] Hourly sync error:', err.message)
