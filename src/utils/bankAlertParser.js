@@ -16,7 +16,7 @@
  */
 
 const pool = require('../db/pool')
-const { getGmailClientForUser } = require('./gmail')
+const { getGmailClientForUser } = require('../routes/gmail')
 
 // ── Email patterns per bank ───────────────────────────────────────────────────
 
