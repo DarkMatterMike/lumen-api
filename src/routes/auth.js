@@ -33,17 +33,15 @@ function setRefreshCookie(res, token) {
   res.cookie('lumen_refresh', token, {
     httpOnly: true,
     secure:   process.env.NODE_ENV === 'production',
-    // 'none' required for cross-origin (Vercel frontend → Railway backend)
-    // 'lax' for local dev where both are same-origin or no HTTPS
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge:   REFRESH_TTL,
-    path:     '/api/auth',
+    path:     '/',   // root path — required for cross-origin cookie to be sent on all requests
   })
 }
 
 function clearRefreshCookie(res) {
   res.clearCookie('lumen_refresh', {
-    path:     '/api/auth',
+    path:     '/',
     secure:   process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
   })
