@@ -26,6 +26,8 @@ const debtRoutes          = require('./routes/debt')
 const documentsRoutes     = require('./routes/documents')
 const learnRoutes         = require('./routes/learn')
 const insightsRoutes      = require('./routes/insights')
+const pushRoutes          = require('./routes/push')
+const reportsRoutes       = require('./routes/reports')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -38,6 +40,7 @@ const { runAllLearning }              = require('./utils/learningEngine')
 const { snapshotNetWorth }            = require('./utils/netWorthTrajectory')
 const { generateDna }                 = require('./utils/spendingDna')
 const { recomputeSuppressions }       = require('./utils/notificationIntelligence')
+const { pushPendingNotifications }    = require('./routes/push')
 
 const app = express()
 
@@ -74,6 +77,8 @@ app.use('/api/debt',         debtRoutes)
 app.use('/api/documents',    documentsRoutes)
 app.use('/api/learn',        learnRoutes)
 app.use('/api/insights',     insightsRoutes)
+app.use('/api/push',         pushRoutes)
+app.use('/api/reports',      reportsRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })
@@ -119,6 +124,9 @@ setInterval(async () => {
 
       // Phase I — learning & personalization (health score, behavioral, adaptive, wins)
       await runAllLearning(user_id).catch(e => console.warn('[Cron Learning]', e.message))
+
+      // Push pending high-priority notifications
+      await pushPendingNotifications(user_id).catch(e => console.warn('[Cron Push]', e.message))
 
       // New features — net worth snapshot (weekly), DNA (monthly), suppression recompute (weekly)
       const todayDate = new Date()

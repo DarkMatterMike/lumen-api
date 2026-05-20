@@ -86,4 +86,15 @@ router.get('/me', require('../middleware/requireAuth'), async (req, res, next) =
   }
 })
 
+// PATCH /api/auth/me/onboarding — mark onboarding complete
+router.patch('/me/onboarding', require('../middleware/requireAuth'), async (req, res, next) => {
+  try {
+    await pool.query(
+      'UPDATE users SET onboarding_complete=TRUE WHERE id=$1',
+      [req.user.id]
+    )
+    res.json({ success: true })
+  } catch (err) { next(err) }
+})
+
 module.exports = router
