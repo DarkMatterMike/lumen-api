@@ -96,7 +96,7 @@ async function generateDna(userId, monthsBack = 3) {
     pool.query(
       `SELECT COUNT(*) AS count, SUM(amount) AS total
        FROM recurring WHERE user_id=$1 AND active=TRUE
-         AND LOWER(COALESCE(category,'')) LIKE '%subscri%'`,
+         AND LOWER(type) = 'subscription'`,
       [userId]
     ),
     // Weekend vs weekday
