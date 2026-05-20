@@ -172,7 +172,7 @@ Monthly spending data for financial personality analysis:
 `.trim()
 
   const aiRes = await client.messages.create({
-    model:      'claude-sonnet-4-6',
+    model:      'claude-sonnet-4-5-20251001',
     max_tokens: 500,
     messages: [{
       role: 'user',

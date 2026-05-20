@@ -123,7 +123,7 @@ async function parseBankStatement(req, res, next) {
     const textChunk = docText.slice(0, 12000)
 
     const extraction = await client.messages.create({
-      model:      'claude-sonnet-4-6',
+      model:      'claude-sonnet-4-5-20251001',
       max_tokens: 4000,
       messages: [{
         role: 'user',

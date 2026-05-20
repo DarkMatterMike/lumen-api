@@ -31,7 +31,7 @@ router.get('/', async (req, res, next) => {
 // PATCH /api/accounts/:id — update include_in_balance (and other fields as needed)
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { include_in_balance } = req.body
+    const { include_in_balance, is_debt } = req.body
     const updates = []
     const values  = []
     let idx = 1
@@ -39,6 +39,11 @@ router.patch('/:id', async (req, res, next) => {
     if (include_in_balance !== undefined) {
       updates.push(`include_in_balance=$${idx++}`)
       values.push(include_in_balance)
+    }
+
+    if (is_debt !== undefined) {
+      updates.push(`is_debt=$${idx++}`)
+      values.push(Boolean(is_debt))
     }
 
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
