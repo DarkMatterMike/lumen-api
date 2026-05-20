@@ -25,6 +25,7 @@ const forecastRoutes      = require('./routes/forecast')
 const debtRoutes          = require('./routes/debt')
 const documentsRoutes     = require('./routes/documents')
 const learnRoutes         = require('./routes/learn')
+const insightsRoutes      = require('./routes/insights')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -34,6 +35,9 @@ const { runCashFlowAlerts }      = require('./utils/cashFlowForecast')
 const { runAllProactiveAlerts }   = require('./utils/proactiveAlerts')
 const { detectPayoffOpportunities } = require('./utils/debtStrategy')
 const { runAllLearning }              = require('./utils/learningEngine')
+const { snapshotNetWorth }            = require('./utils/netWorthTrajectory')
+const { generateDna }                 = require('./utils/spendingDna')
+const { recomputeSuppressions }       = require('./utils/notificationIntelligence')
 
 const app = express()
 
@@ -69,6 +73,7 @@ app.use('/api/forecast',     forecastRoutes)
 app.use('/api/debt',         debtRoutes)
 app.use('/api/documents',    documentsRoutes)
 app.use('/api/learn',        learnRoutes)
+app.use('/api/insights',     insightsRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })
@@ -114,6 +119,16 @@ setInterval(async () => {
 
       // Phase I — learning & personalization (health score, behavioral, adaptive, wins)
       await runAllLearning(user_id).catch(e => console.warn('[Cron Learning]', e.message))
+
+      // New features — net worth snapshot (weekly), DNA (monthly), suppression recompute (weekly)
+      const todayDate = new Date()
+      if (todayDate.getDay() === 1) { // Mondays
+        await snapshotNetWorth(user_id).catch(e => console.warn('[Cron NetWorth]', e.message))
+        await recomputeSuppressions(user_id).catch(e => console.warn('[Cron Suppression]', e.message))
+      }
+      if (todayDate.getDate() <= 2 && todayDate.getHours() < 4) { // 1st-2nd of month, early AM
+        await generateDna(user_id).catch(e => console.warn('[Cron DNA]', e.message))
+      }
     }
   } catch (err) {
     console.error('[Cron] Hourly sync error:', err.message)

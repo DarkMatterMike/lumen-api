@@ -83,6 +83,14 @@ router.delete('/dismissed', requireAuth, async (req, res) => {
 // Internal helper — other routes can use this to write notifications
 async function createNotification(user_id, { type, title, body, icon, metadata }) {
   try {
+    // Feature 10 — check suppression before inserting
+    // Win and alert types are never suppressed (too important)
+    if (type && !['win', 'alert', 'duplicate'].includes(type)) {
+      const { isSuppressed } = require('../utils/notificationIntelligence')
+      const suppressed = await isSuppressed(user_id, type).catch(() => false)
+      if (suppressed) return null
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO notifications (user_id, type, title, body, icon, metadata)
        VALUES ($1, $2, $3, $4, $5, $6)
