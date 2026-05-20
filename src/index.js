@@ -23,6 +23,7 @@ const importRoutes        = require('./routes/import')
 const duplicatesRoutes    = require('./routes/duplicates')
 const forecastRoutes      = require('./routes/forecast')
 const debtRoutes          = require('./routes/debt')
+const documentsRoutes     = require('./routes/documents')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -64,6 +65,7 @@ app.use('/api/import',       importRoutes)
 app.use('/api/duplicates',   duplicatesRoutes)
 app.use('/api/forecast',     forecastRoutes)
 app.use('/api/debt',         debtRoutes)
+app.use('/api/documents',    documentsRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })
