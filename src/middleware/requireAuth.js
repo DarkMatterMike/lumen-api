@@ -1,18 +1,23 @@
 const jwt = require('jsonwebtoken')
 
 function requireAuth(req, res, next) {
+  // Accept token from Authorization header (Bearer) — frontend sends this
   const header = req.headers.authorization
-  if (!header || !header.startsWith('Bearer ')) {
+  const token  = header?.startsWith('Bearer ') ? header.split(' ')[1] : null
+
+  if (!token) {
     return res.status(401).json({ error: 'Not authenticated' })
   }
 
-  const token = header.split(' ')[1]
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET)
-    req.user = decoded  // { id, email }
+    req.user = jwt.verify(token, process.env.JWT_SECRET)
     next()
   } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' })
+    // Expired token — client should call /api/auth/refresh
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expired', expired: true })
+    }
+    return res.status(401).json({ error: 'Invalid token' })
   }
 }
 

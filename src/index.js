@@ -1,7 +1,10 @@
 require('dotenv').config()
 const express    = require('express')
-const cors       = require('cors')
-const pool       = require('./db/pool')
+const cors        = require('cors')
+const helmet      = require('helmet')
+const rateLimit   = require('express-rate-limit')
+const cookieParser = require('cookie-parser')
+const pool        = require('./db/pool')
 const errorHandler = require('./middleware/errorHandler')
 
 const authRoutes         = require('./routes/auth')
@@ -44,12 +47,42 @@ const { pushPendingNotifications }    = require('./routes/push')
 
 const app = express()
 
+// ── S1 Security ─────────────────────────────────────────────
+// Helmet — 11 security headers in one line
+app.use(helmet({ contentSecurityPolicy: false }))  // CSP off — API-only, no HTML served
+
+// Rate limiting — auth endpoints are stricter
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,  // 15 minutes
+  max: 10,                    // 10 attempts per window
+  message: { error: 'Too many attempts. Try again in 15 minutes.' },
+  standardHeaders: true, legacyHeaders: false,
+})
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,  // 1 minute
+  max: 200,              // 200 req/min per IP
+  message: { error: 'Too many requests.' },
+  standardHeaders: true, legacyHeaders: false,
+  skip: (req) => req.path === '/api/health',
+})
+app.use('/api/auth', authLimiter)
+app.use('/api', apiLimiter)
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: (origin, cb) => {
+    const allowed = process.env.FRONTEND_URL
+    // Allow requests with no origin (mobile apps, Postman) in dev
+    if (!origin || !allowed) return cb(null, true)
+    if (origin === allowed) return cb(null, true)
+    cb(new Error('CORS: origin not allowed'))
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
 }))
-app.use(express.json())
+// Body size limit — prevent large payload attacks
+app.use(express.json({ limit: '2mb' }))
+app.use(cookieParser())
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
