@@ -24,6 +24,7 @@ const duplicatesRoutes    = require('./routes/duplicates')
 const forecastRoutes      = require('./routes/forecast')
 const debtRoutes          = require('./routes/debt')
 const documentsRoutes     = require('./routes/documents')
+const learnRoutes         = require('./routes/learn')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -32,6 +33,7 @@ const { checkPaceAlerts, autoCompleteCategories } = require('./utils/budgetIntel
 const { runCashFlowAlerts }      = require('./utils/cashFlowForecast')
 const { runAllProactiveAlerts }   = require('./utils/proactiveAlerts')
 const { detectPayoffOpportunities } = require('./utils/debtStrategy')
+const { runAllLearning }              = require('./utils/learningEngine')
 
 const app = express()
 
@@ -66,6 +68,7 @@ app.use('/api/duplicates',   duplicatesRoutes)
 app.use('/api/forecast',     forecastRoutes)
 app.use('/api/debt',         debtRoutes)
 app.use('/api/documents',    documentsRoutes)
+app.use('/api/learn',        learnRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })
@@ -108,6 +111,9 @@ setInterval(async () => {
 
       // Phase G — debt payoff opportunity detection
       await detectPayoffOpportunities(user_id).catch(e => console.warn('[Cron DebtOpps]', e.message))
+
+      // Phase I — learning & personalization (health score, behavioral, adaptive, wins)
+      await runAllLearning(user_id).catch(e => console.warn('[Cron Learning]', e.message))
     }
   } catch (err) {
     console.error('[Cron] Hourly sync error:', err.message)
