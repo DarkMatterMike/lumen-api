@@ -27,7 +27,8 @@ const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
 const { syncGmailForUser, runPhase5 } = require('./routes/gmail-parser')
 const { checkPaceAlerts, autoCompleteCategories } = require('./utils/budgetIntelligence')
-const { runCashFlowAlerts } = require('./utils/cashFlowForecast')
+const { runCashFlowAlerts }      = require('./utils/cashFlowForecast')
+const { runAllProactiveAlerts }   = require('./utils/proactiveAlerts')
 
 const app = express()
 
@@ -96,6 +97,9 @@ setInterval(async () => {
       await checkPaceAlerts(user_id).catch(e => console.warn('[Cron PaceAlerts]', e.message))
       await autoCompleteCategories(user_id).catch(e => console.warn('[Cron AutoComplete]', e.message))
       await runCashFlowAlerts(user_id).catch(e => console.warn('[Cron CashFlow]', e.message))
+
+      // Phase E — proactive alerts (anomaly, patterns, subscriptions, double billing)
+      await runAllProactiveAlerts(user_id).catch(e => console.warn('[Cron ProactiveAlerts]', e.message))
     }
   } catch (err) {
     console.error('[Cron] Hourly sync error:', err.message)

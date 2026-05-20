@@ -13,6 +13,7 @@ const {
   runCashFlowAlerts,
   checkTransferSuggestions,
 } = require('../utils/cashFlowForecast')
+const { runAllProactiveAlerts } = require('../utils/proactiveAlerts')
 
 router.use(requireAuth)
 
@@ -61,6 +62,14 @@ router.post('/alerts', async (req, res, next) => {
   try {
     const result = await runCashFlowAlerts(req.user.id)
     res.json({ success: true, ...result })
+  } catch (err) { next(err) }
+})
+
+// POST /api/forecast/proactive-alerts — manually trigger all Phase E alerts
+router.post('/proactive-alerts', async (req, res, next) => {
+  try {
+    const results = await runAllProactiveAlerts(req.user.id)
+    res.json({ success: true, ...results })
   } catch (err) { next(err) }
 })
 
