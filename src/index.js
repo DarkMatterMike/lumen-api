@@ -32,6 +32,8 @@ const learnRoutes         = require('./routes/learn')
 const insightsRoutes      = require('./routes/insights')
 const pushRoutes          = require('./routes/push')
 const reportsRoutes       = require('./routes/reports')
+const exportRoutes        = require('./routes/export')
+const recurringDetectRoute = require('./routes/recurringDetect')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -114,6 +116,8 @@ app.use('/api/learn',        learnRoutes)
 app.use('/api/insights',     insightsRoutes)
 app.use('/api/push',         pushRoutes)
 app.use('/api/reports',      reportsRoutes)
+app.use('/api/export',       exportRoutes)
+app.use('/api/recurring-detect', recurringDetectRoute)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })

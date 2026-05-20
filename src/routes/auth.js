@@ -33,14 +33,20 @@ function setRefreshCookie(res, token) {
   res.cookie('lumen_refresh', token, {
     httpOnly: true,
     secure:   process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    // 'none' required for cross-origin (Vercel frontend → Railway backend)
+    // 'lax' for local dev where both are same-origin or no HTTPS
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge:   REFRESH_TTL,
     path:     '/api/auth',
   })
 }
 
 function clearRefreshCookie(res) {
-  res.clearCookie('lumen_refresh', { path: '/api/auth' })
+  res.clearCookie('lumen_refresh', {
+    path:     '/api/auth',
+    secure:   process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  })
 }
 
 function validatePassword(pw) {
@@ -95,8 +101,9 @@ async function recordSuccess(userId, email, ip) {
 // ── POST /api/auth/register ───────────────────────────────────
 router.post('/register', async (req, res, next) => {
   try {
-    const { email, password, name } = req.body
+    const { email, password, name, terms_agreed } = req.body
     if (!email || !password) return res.status(400).json({ error: 'Email and password are required' })
+    if (!terms_agreed) return res.status(400).json({ error: 'You must agree to the Terms of Service and Privacy Policy to create an account' })
 
     const pwErr = validatePassword(password)
     if (pwErr) return res.status(400).json({ error: pwErr })
@@ -106,7 +113,8 @@ router.post('/register', async (req, res, next) => {
 
     const hash = await bcrypt.hash(password, 12)
     const { rows } = await pool.query(
-      'INSERT INTO users (email, password_hash, name) VALUES ($1,$2,$3) RETURNING id, email, name',
+      `INSERT INTO users (email, password_hash, name, terms_agreed_at, terms_version, privacy_agreed_at)
+       VALUES ($1,$2,$3,NOW(),'1.0',NOW()) RETURNING id, email, name`,
       [email.toLowerCase(), hash, name || null]
     )
     const user = rows[0]
