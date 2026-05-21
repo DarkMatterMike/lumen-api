@@ -34,6 +34,8 @@ const pushRoutes          = require('./routes/push')
 const reportsRoutes       = require('./routes/reports')
 const exportRoutes        = require('./routes/export')
 const recurringDetectRoute = require('./routes/recurringDetect')
+const daniRoutes          = require('./routes/dani')
+const adminRoutes         = require('./routes/admin')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -136,6 +138,8 @@ app.use('/api/push',         pushRoutes)
 app.use('/api/reports',      reportsRoutes)
 app.use('/api/export',       exportRoutes)
 app.use('/api/recurring-detect', recurringDetectRoute)
+app.use('/api/dani',         daniRoutes)
+app.use('/api/admin',        adminRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })

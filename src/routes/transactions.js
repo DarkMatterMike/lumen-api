@@ -76,11 +76,53 @@ router.get('/', async (req, res, next) => {
       [req.user.id]
     )
 
+    // ── 5. Daily cumulative spend — current month ───────────────
+    const { rows: dailyRows } = await pool.query(
+      `SELECT
+         EXTRACT(DAY FROM date)::int AS day,
+         SUM(CASE WHEN tx_type = 'expense' OR (tx_type IS NULL AND amount < 0) THEN ABS(amount) ELSE 0 END) AS day_spend
+       FROM transactions
+       WHERE user_id = $1
+         AND COALESCE(tx_type,'expense') NOT IN ('transfer','income')
+         AND amount < 0
+         AND date >= date_trunc('month', CURRENT_DATE)
+       GROUP BY day
+       ORDER BY day`,
+      [req.user.id]
+    )
+
+    // ── 6. Last month total spend ────────────────────────────────
+    const { rows: lastMonthRows } = await pool.query(
+      `SELECT COALESCE(SUM(ABS(amount)), 0) AS spending
+       FROM transactions
+       WHERE user_id = $1
+         AND COALESCE(tx_type,'expense') NOT IN ('transfer','income')
+         AND amount < 0
+         AND date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
+         AND date <  date_trunc('month', CURRENT_DATE)`,
+      [req.user.id]
+    )
+
+    // Build cumulative daily array for the chart
+    const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
+    const dayMap = {}
+    for (const r of dailyRows) dayMap[r.day] = Number(r.day_spend)
+    let cumulative = 0
+    const dailyCumulative = []
+    for (let d = 1; d <= daysInMonth; d++) {
+      if (d <= new Date().getDate()) {
+        cumulative += dayMap[d] || 0
+        dailyCumulative.push({ day: d, cumSpend: Math.round(cumulative * 100) / 100 })
+      }
+    }
+
     res.json({
-      currentMonth: currentRows,
-      historical:   histRows,
-      totals:       totals[0],
-      pagination:   { page, pageSize, total: totalHistorical, hasMore },
+      currentMonth:    currentRows,
+      historical:      histRows,
+      totals:          totals[0],
+      pagination:      { page, pageSize, total: totalHistorical, hasMore },
+      dailyCumulative,
+      lastMonthSpend:  Number(lastMonthRows[0]?.spending || 0),
     })
   } catch (err) {
     next(err)

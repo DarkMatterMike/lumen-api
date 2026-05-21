@@ -30,7 +30,7 @@ const IS_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV =
 // ── Token helpers ─────────────────────────────────────────────
 function makeAccessToken(user) {
   return jwt.sign(
-    { id: user.id, email: user.email },
+    { id: user.id, email: user.email, role: user.role || 'user' },
     process.env.JWT_SECRET,
     { expiresIn: ACCESS_TTL }
   )
@@ -63,6 +63,12 @@ function clearRefreshCookie(res) {
 }
 
 async function issueSession(res, userId, email, name, ttl, ip, ua) {
+  // Fetch role so it's included in the access token
+  const { rows: roleRows } = await pool.query(
+    'SELECT role FROM users WHERE id = $1', [userId]
+  )
+  const role = roleRows[0]?.role || 'user'
+
   const refresh = makeRefreshToken()
   await pool.query(
     `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent)
@@ -70,7 +76,7 @@ async function issueSession(res, userId, email, name, ttl, ip, ua) {
     [userId, hashToken(refresh), new Date(Date.now() + ttl), ip, ua]
   )
   setRefreshCookie(res, refresh, ttl)
-  return makeAccessToken({ id: userId, email })
+  return makeAccessToken({ id: userId, email, role })
 }
 
 // ── Password validation ───────────────────────────────────────
@@ -302,7 +308,7 @@ router.post('/refresh', async (req, res, next) => {
     // Accept valid tokens AND tokens revoked within the last 30s (race condition grace period)
     const { rows } = await pool.query(
       `SELECT rt.id, rt.user_id, rt.revoked, rt.expires_at, rt.revoked_at,
-              u.email, u.name
+              u.email, u.name, u.role
        FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
        WHERE rt.token_hash = $1
@@ -320,7 +326,7 @@ router.post('/refresh', async (req, res, next) => {
     }
 
     const row  = rows[0]
-    const user = { id: row.user_id, email: row.email, name: row.name }
+    const user = { id: row.user_id, email: row.email, name: row.name, role: row.role || 'user' }
 
     if (row.revoked) {
       // Within grace period — find the replacement token that was issued
@@ -409,7 +415,7 @@ router.get('/sessions', requireAuth, async (req, res, next) => {
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, email, name, google_avatar, oauth_provider, created_at FROM users WHERE id=$1',
+      'SELECT id, email, name, role, google_avatar, oauth_provider, created_at FROM users WHERE id=$1',
       [req.user.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'User not found' })
