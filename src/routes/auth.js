@@ -122,10 +122,10 @@ router.post('/register', async (req, res, next) => {
     const refresh = makeRefreshToken()
     await pool.query(
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)',
-      [user.id, hashToken(refresh), new Date(Date.now() + REFRESH_TTL), req.ip, req.get('user-agent')]
+      [user.id, hashToken(refresh), new Date(Date.now() + REFRESH_TTL_7DAY), req.ip, req.get('user-agent')]
     )
 
-    setRefreshCookie(res, refresh)
+    setRefreshCookie(res, refresh, REFRESH_TTL_7DAY)
     res.status(201).json({ token: makeAccessToken(user), user })
   } catch (err) { next(err) }
 })
@@ -172,16 +172,16 @@ router.post('/refresh', async (req, res, next) => {
     const token = req.cookies?.lumen_refresh
     if (!token) return res.status(401).json({ error: 'No refresh token' })
 
-    // Accept token if valid OR if it was revoked within the last 30 seconds
-    // (grace period prevents race conditions when multiple tabs refresh simultaneously)
+    // Accept token if valid, OR revoked within last 30s (grace period for race conditions)
     const { rows } = await pool.query(
-      `SELECT rt.id, rt.user_id, rt.revoked, rt.expires_at, rt.revoked_at,
+      `SELECT rt.id, rt.user_id, rt.revoked, rt.expires_at,
+              COALESCE(rt.revoked_at, NULL) AS revoked_at,
               u.email, u.name
        FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
        WHERE rt.token_hash=$1
          AND rt.expires_at > NOW()
-         AND (rt.revoked=FALSE OR rt.revoked_at > NOW() - INTERVAL '30 seconds')`,
+         AND (rt.revoked=FALSE OR COALESCE(rt.revoked_at, '1970-01-01') > NOW() - INTERVAL '30 seconds')`,
       [hashToken(token)]
     )
     if (!rows.length) {
@@ -200,16 +200,24 @@ router.post('/refresh', async (req, res, next) => {
       return res.json({ token: makeAccessToken(user), user })
     }
 
-    // Preserve remaining TTL from old token
+    // Preserve remaining TTL from old token so 7-day doesn't shrink on every refresh
     const remaining = new Date(row.expires_at).getTime() - Date.now()
-    const newTtl    = Math.max(remaining, 60 * 60 * 1000)
+    const newTtl    = Math.max(remaining, 60 * 60 * 1000) // at least 1h
 
     const newRefresh = makeRefreshToken()
-    // Mark revoked with timestamp so grace period works
-    await pool.query(
-      'UPDATE refresh_tokens SET revoked=TRUE, revoked_at=NOW() WHERE id=$1',
-      [row.id]
-    )
+    try {
+      // Mark old token revoked (with timestamp for grace-period race condition handling)
+      await pool.query(
+        'UPDATE refresh_tokens SET revoked=TRUE, revoked_at=NOW() WHERE id=$1',
+        [row.id]
+      )
+    } catch (revokeErr) {
+      // If revoked_at column doesn't exist yet (schema not migrated), fall back
+      await pool.query(
+        'UPDATE refresh_tokens SET revoked=TRUE WHERE id=$1',
+        [row.id]
+      )
+    }
     await pool.query(
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)',
       [user.id, hashToken(newRefresh), new Date(Date.now() + newTtl), req.ip, req.get('user-agent')]
