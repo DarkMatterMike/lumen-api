@@ -205,28 +205,52 @@ router.get('/google/redirect', (req, res) => {
 })
 
 // ── GET /api/auth/google/callback ─────────────────────────────
-// Google redirects here after user approves. Exchange code for user info,
-// then create/find user and redirect to frontend with session.
 router.get('/google/callback', async (req, res, next) => {
+  const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:5173'
   try {
     const { code, error } = req.query
-    const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:5173'
+
+    console.log('[Google callback] code present:', !!code, 'error:', error)
+    console.log('[Google callback] GOOGLE_LOGIN_REDIRECT_URI:', process.env.GOOGLE_LOGIN_REDIRECT_URI)
+    console.log('[Google callback] GOOGLE_CLIENT_ID set:', !!process.env.GOOGLE_CLIENT_ID)
+    console.log('[Google callback] GOOGLE_CLIENT_SECRET set:', !!process.env.GOOGLE_CLIENT_SECRET)
 
     if (error || !code) {
-      return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent(error || 'cancelled')}`)
+      console.error('[Google callback] No code or error param:', error)
+      return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent(error || 'Google sign-in was cancelled')}`)
     }
 
     const oauth2 = getLoginOAuth2Client()
-    const { tokens } = await oauth2.getToken(code)
+    console.log('[Google callback] Exchanging code for tokens...')
+
+    let tokens
+    try {
+      const result = await oauth2.getToken(code)
+      tokens = result.tokens
+      console.log('[Google callback] Tokens received, id_token present:', !!tokens.id_token)
+    } catch (tokenErr) {
+      console.error('[Google callback] Token exchange failed:', tokenErr.message)
+      return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Failed to exchange Google code: ' + tokenErr.message)}`)
+    }
+
     oauth2.setCredentials(tokens)
 
-    // Get user profile from Google
-    const peopleApi = google.oauth2({ version: 'v2', auth: oauth2 })
-    const { data }  = await peopleApi.userinfo.get()
+    let data
+    try {
+      const userInfoApi = google.oauth2({ version: 'v2', auth: oauth2 })
+      const response = await userInfoApi.userinfo.get()
+      data = response.data
+      console.log('[Google callback] User info received, email:', data.email)
+    } catch (profileErr) {
+      console.error('[Google callback] Profile fetch failed:', profileErr.message)
+      return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Failed to get Google profile')}`)
+    }
+
     const { id: googleId, email, name, picture } = data
 
     if (!email) {
-      return res.redirect(`${FRONTEND}/?auth_error=no_email`)
+      console.error('[Google callback] No email in Google profile')
+      return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Google account has no email address')}`)
     }
 
     // Find or create user
@@ -235,35 +259,33 @@ router.get('/google/callback', async (req, res, next) => {
       [googleId, email.toLowerCase()]
     )
     let user = rows[0]
+    console.log('[Google callback] Existing user found:', !!user)
 
     if (!user) {
+      // Check if terms/privacy columns exist before inserting
       const { rows: newRows } = await pool.query(
-        `INSERT INTO users
-           (email, name, google_id, google_email, google_name, google_avatar,
-            oauth_provider, terms_agreed_at, terms_version, privacy_agreed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,'google',NOW(),'1.0',NOW())
+        `INSERT INTO users (email, name, google_id, google_email, google_name, google_avatar, oauth_provider)
+         VALUES ($1,$2,$3,$4,$5,$6,'google')
          RETURNING id, email, name`,
-        [email.toLowerCase(), name, googleId, email.toLowerCase(), name, picture]
+        [email.toLowerCase(), name || email.split('@')[0], googleId, email.toLowerCase(), name, picture]
       )
       user = newRows[0]
+      console.log('[Google callback] New user created:', user.id)
     } else if (!user.google_id) {
-      // Link Google to existing email/password account
       await pool.query(
         `UPDATE users SET google_id=$1, google_email=$2, google_name=$3, google_avatar=$4 WHERE id=$5`,
         [googleId, email.toLowerCase(), name, picture, user.id]
       )
+      console.log('[Google callback] Linked Google to existing user:', user.id)
     }
 
-    // Issue session and store access token in cookie (refresh token in httpOnly cookie)
     const accessToken = await issueSession(res, user.id, user.email, user.name, REFRESH_7DAY, req.ip, req.get('user-agent'))
+    console.log('[Google callback] Session issued, redirecting to frontend')
 
-    // Redirect to frontend — pass the access token in the URL fragment (never logged)
-    // The frontend reads it once, stores in localStorage, then clears the fragment.
     res.redirect(`${FRONTEND}/?google_token=${encodeURIComponent(accessToken)}`)
   } catch (err) {
-    console.error('[Google callback error]', err.message)
-    const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:5173'
-    res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Sign-in failed. Please try again.')}`)
+    console.error('[Google callback] Unhandled error:', err.message, err.stack)
+    res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Sign-in failed: ' + err.message)}`)
   }
 })
 
