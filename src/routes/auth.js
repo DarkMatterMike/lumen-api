@@ -31,11 +31,15 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex')
 }
 
+// Use COOKIE_SECURE env var explicitly — Railway doesn't set NODE_ENV=production
+// Set COOKIE_SECURE=true in your Railway environment variables
+const IS_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production'
+
 function setRefreshCookie(res, token, ttl = REFRESH_TTL) {
   res.cookie('lumen_refresh', token, {
     httpOnly: true,
-    secure:   process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    secure:   IS_SECURE,
+    sameSite: IS_SECURE ? 'none' : 'lax',
     maxAge:   ttl,
     path:     '/',
   })
@@ -44,8 +48,8 @@ function setRefreshCookie(res, token, ttl = REFRESH_TTL) {
 function clearRefreshCookie(res) {
   res.clearCookie('lumen_refresh', {
     path:     '/',
-    secure:   process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    secure:   IS_SECURE,
+    sameSite: IS_SECURE ? 'none' : 'lax',
   })
 }
 
