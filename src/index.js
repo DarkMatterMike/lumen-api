@@ -59,6 +59,32 @@ app.set('trust proxy', 1)
 // Helmet — 11 security headers in one line
 app.use(helmet({ contentSecurityPolicy: false }))  // CSP off — API-only, no HTML served
 
+// ── cookieParser MUST come before everything that reads cookies ──
+// This includes rate limiters and all routes. If it's after them,
+// req.cookies is undefined and refresh tokens are never read.
+app.use(cookieParser())
+
+// ── CORS MUST come before rate limiters ──
+// Browser sends OPTIONS preflight before every cross-origin POST.
+// If rate limiters run first they can reject the preflight before
+// CORS headers are set, causing the browser to block the request.
+app.use(cors({
+  origin: (origin, cb) => {
+    const allowed = process.env.FRONTEND_URL
+    // Allow requests with no origin (mobile apps, Postman, curl) in dev
+    if (!origin || !allowed) return cb(null, true)
+    if (origin === allowed) return cb(null, true)
+    cb(new Error('CORS: origin not allowed'))
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+  exposedHeaders: ['Set-Cookie'],
+  credentials: true,
+}))
+
+// Body parsing
+app.use(express.json({ limit: '2mb' }))
+
 // Rate limiting — auth endpoints are stricter
 // /api/auth/refresh is intentionally excluded: it fires proactively every ~13 min
 // and must never be rate-limited by IP (cloud proxies collapse all users to one IP).
@@ -78,22 +104,6 @@ const apiLimiter = rateLimit({
 })
 app.use('/api/auth', authLimiter)
 app.use('/api', apiLimiter)
-
-app.use(cors({
-  origin: (origin, cb) => {
-    const allowed = process.env.FRONTEND_URL
-    // Allow requests with no origin (mobile apps, Postman) in dev
-    if (!origin || !allowed) return cb(null, true)
-    if (origin === allowed) return cb(null, true)
-    cb(new Error('CORS: origin not allowed'))
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-}))
-// Body size limit — prevent large payload attacks
-app.use(express.json({ limit: '2mb' }))
-app.use(cookieParser())
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
