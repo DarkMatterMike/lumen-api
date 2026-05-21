@@ -7,9 +7,8 @@ const pool     = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 
 const ACCESS_TTL  = '15m'
-const REFRESH_TTL        = 30 * 24 * 60 * 60 * 1000  // 30 days ms (default)
-const REFRESH_TTL_7DAY   =  7 * 24 * 60 * 60 * 1000  // 7 days — remember me
-const REFRESH_TTL_SESSION =  1 * 24 * 60 * 60 * 1000  // 1 day — no remember me
+const REFRESH_TTL_30DAY  = 30 * 24 * 60 * 60 * 1000  // 30 days — remember me
+const REFRESH_TTL_SESSION =  1 * 24 * 60 * 60 * 1000  // 1 day  — no remember me
 const MAX_FAILS   = 10
 const LOCK_MIN    = 15
 
@@ -126,10 +125,10 @@ router.post('/register', async (req, res, next) => {
     const refresh = makeRefreshToken()
     await pool.query(
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)',
-      [user.id, hashToken(refresh), new Date(Date.now() + REFRESH_TTL_7DAY), req.ip, req.get('user-agent')]
+      [user.id, hashToken(refresh), new Date(Date.now() + REFRESH_TTL_30DAY), req.ip, req.get('user-agent')]
     )
 
-    setRefreshCookie(res, refresh, REFRESH_TTL_7DAY)
+    setRefreshCookie(res, refresh, REFRESH_TTL_30DAY)
     res.status(201).json({ token: makeAccessToken(user), user })
   } catch (err) { next(err) }
 })
@@ -157,7 +156,7 @@ router.post('/login', async (req, res, next) => {
     await recordSuccess(user.id, email, req.ip)
 
     const rememberMe = req.body.rememberMe !== false  // default true
-    const ttl = rememberMe ? REFRESH_TTL_7DAY : REFRESH_TTL_SESSION
+    const ttl = rememberMe ? REFRESH_TTL_30DAY : REFRESH_TTL_SESSION
 
     const refresh = makeRefreshToken()
     await pool.query(
@@ -204,9 +203,10 @@ router.post('/refresh', async (req, res, next) => {
       return res.json({ token: makeAccessToken(user), user })
     }
 
-    // Preserve remaining TTL from old token so 7-day doesn't shrink on every refresh
+    // Preserve remaining TTL from old token so 30-day doesn't shrink on each refresh.
+    // Enforce a minimum of 24h so a token refreshed with 1s remaining doesn't immediately expire.
     const remaining = new Date(row.expires_at).getTime() - Date.now()
-    const newTtl    = Math.max(remaining, 60 * 60 * 1000) // at least 1h
+    const newTtl    = Math.max(remaining, 24 * 60 * 60 * 1000) // at least 24h
 
     const newRefresh = makeRefreshToken()
     try {
