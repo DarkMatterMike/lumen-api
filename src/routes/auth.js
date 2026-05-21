@@ -411,11 +411,22 @@ router.get('/sessions', requireAuth, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ── PATCH /api/auth/me/onboarding ────────────────────────────
+router.patch('/me/onboarding', requireAuth, async (req, res, next) => {
+  try {
+    await pool.query(
+      'UPDATE users SET onboarding_complete = TRUE WHERE id = $1',
+      [req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (err) { next(err) }
+})
+
 // ── GET /api/auth/me ──────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, google_avatar, oauth_provider, created_at FROM users WHERE id=$1',
+      'SELECT id, email, name, role, google_avatar, oauth_provider, created_at, onboarding_complete FROM users WHERE id=$1',
       [req.user.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'User not found' })
