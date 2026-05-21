@@ -131,6 +131,46 @@ router.get('/:id/transactions', async (req, res, next) => {
   }
 })
 
+// GET /api/budgets/:id/history — 6-month spend history for sparkline/chart
+router.get('/:id/history', async (req, res, next) => {
+  try {
+    const uid = req.user.id
+    const { rows: budget } = await pool.query(
+      'SELECT * FROM budgets WHERE id=$1 AND user_id=$2',
+      [req.params.id, uid]
+    )
+    if (!budget.length) return res.status(404).json({ error: 'Budget not found' })
+
+    const { rows: history } = await pool.query(
+      `SELECT
+         to_char(date_trunc('month', date), 'Mon') AS month,
+         date_trunc('month', date) AS month_start,
+         ABS(SUM(amount)) AS spent
+       FROM transactions
+       WHERE user_id=$1
+         AND category ILIKE $2
+         AND amount < 0
+         AND COALESCE(tx_type,'expense') != 'transfer'
+         AND date >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months'
+       GROUP BY date_trunc('month', date)
+       ORDER BY month_start ASC`,
+      [uid, budget[0].name]
+    )
+
+    // Fill in missing months with 0
+    const months = []
+    for (let i = 5; i >= 0; i--) {
+      const d     = new Date()
+      d.setMonth(d.getMonth() - i)
+      const key   = d.toLocaleString('en-US', { month: 'short' })
+      const found = history.find(h => h.month === key)
+      months.push({ month: key, spent: found ? Number(found.spent) : 0 })
+    }
+
+    res.json({ history: months, cap: Number(budget[0].cap) })
+  } catch (err) { next(err) }
+})
+
 // PATCH /api/budgets/:id/complete — toggle completed status
 router.patch('/:id/complete', async (req, res, next) => {
   try {
