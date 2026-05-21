@@ -171,11 +171,19 @@ ${budgets.length > 0 ? budgets.map(b => {
   return `- ${b.name}: $${spent.toFixed(2)} spent of $${cap.toLocaleString()} cap (${pct}%)${flag}`
 }).join('\n') : '- No budget categories set'}
 
-ALL RECURRING ITEMS THIS MONTH
-${recurring.length > 0 ? recurring.map(r => {
-  const isPast = r.day_of_month < todayDay
-  return `- ${r.name}: ${r.type === 'income' ? '+' : '-'}$${Number(r.amount).toLocaleString()} on day ${r.day_of_month}${isPast ? ' [passed]' : ' [upcoming]'}`
-}).join('\n') : '- No recurring items'}
+ ALL RECURRING ITEMS THIS MONTH
+ ${recurring.length > 0 ? recurring.map(r => {
+   const isPast   = r.day_of_month < todayDay
+   const isToday  = r.day_of_month === todayDay
+   const daysAway = r.day_of_month - todayDay
+   const actualDate = new Date(today.getFullYear(), today.getMonth(), r.day_of_month)
+     .toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })
+   const timing = isPast   ? '[PASSED]'
+                : isToday  ? '[TODAY]'
+                : daysAway === 1 ? '[TOMORROW]'
+                : `[in ${daysAway} days — ${actualDate}]`
+   return `- ${r.name}: ${r.type === 'income' ? '+' : '-'}$${Number(r.amount).toLocaleString()} on ${actualDate} ${timing}`
+ }).join('\n') : '- No recurring items'}
 
 RECENT TRANSACTIONS (last 20, transfers excluded)
 ${recentTx.map(t => `- ${new Date(t.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}: ${t.name} ${Number(t.amount) < 0 ? '−' : '+'}$${Math.abs(Number(t.amount)).toFixed(2)} [${t.category}]`).join('\n')}
