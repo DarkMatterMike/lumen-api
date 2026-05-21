@@ -50,16 +50,24 @@ const { pushPendingNotifications }    = require('./routes/push')
 
 const app = express()
 
+// ── Trust proxy — required on Railway/Render/Fly/Heroku ────────
+// Without this, req.ip is always the load balancer IP, causing ALL users
+// to share one rate-limit bucket and randomly locking everyone out.
+app.set('trust proxy', 1)
+
 // ── S1 Security ─────────────────────────────────────────────
 // Helmet — 11 security headers in one line
 app.use(helmet({ contentSecurityPolicy: false }))  // CSP off — API-only, no HTML served
 
 // Rate limiting — auth endpoints are stricter
+// /api/auth/refresh is intentionally excluded: it fires proactively every ~13 min
+// and must never be rate-limited by IP (cloud proxies collapse all users to one IP).
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,  // 15 minutes
-  max: 10,                    // 10 attempts per window
+  max: 20,                    // 20 attempts per window (login/register/me only)
   message: { error: 'Too many attempts. Try again in 15 minutes.' },
   standardHeaders: true, legacyHeaders: false,
+  skip: (req) => req.path === '/refresh' || req.path === '/me',
 })
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,  // 1 minute
