@@ -172,11 +172,16 @@ router.post('/refresh', async (req, res, next) => {
     const token = req.cookies?.lumen_refresh
     if (!token) return res.status(401).json({ error: 'No refresh token' })
 
+    // Accept token if valid OR if it was revoked within the last 30 seconds
+    // (grace period prevents race conditions when multiple tabs refresh simultaneously)
     const { rows } = await pool.query(
-      `SELECT rt.id, rt.user_id, u.email, u.name
+      `SELECT rt.id, rt.user_id, rt.revoked, rt.expires_at, rt.revoked_at,
+              u.email, u.name
        FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
-       WHERE rt.token_hash=$1 AND rt.revoked=FALSE AND rt.expires_at > NOW()`,
+       WHERE rt.token_hash=$1
+         AND rt.expires_at > NOW()
+         AND (rt.revoked=FALSE OR rt.revoked_at > NOW() - INTERVAL '30 seconds')`,
       [hashToken(token)]
     )
     if (!rows.length) {
@@ -187,13 +192,24 @@ router.post('/refresh', async (req, res, next) => {
     const row  = rows[0]
     const user = { id: row.user_id, email: row.email, name: row.name }
 
-    // Rotate: revoke old, issue new
-    // Preserve remaining TTL from old token (don't extend on each refresh)
+    // If already revoked but within grace period, find the replacement token
+    // and return a new access token without re-rotating (idempotent refresh)
+    if (row.revoked) {
+      // Just issue a new access token — the cookie already has the new refresh token
+      // from the first successful refresh call
+      return res.json({ token: makeAccessToken(user), user })
+    }
+
+    // Preserve remaining TTL from old token
     const remaining = new Date(row.expires_at).getTime() - Date.now()
-    const newTtl    = Math.max(remaining, 60 * 60 * 1000)  // at least 1 hour
+    const newTtl    = Math.max(remaining, 60 * 60 * 1000)
 
     const newRefresh = makeRefreshToken()
-    await pool.query('UPDATE refresh_tokens SET revoked=TRUE WHERE id=$1', [row.id])
+    // Mark revoked with timestamp so grace period works
+    await pool.query(
+      'UPDATE refresh_tokens SET revoked=TRUE, revoked_at=NOW() WHERE id=$1',
+      [row.id]
+    )
     await pool.query(
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)',
       [user.id, hashToken(newRefresh), new Date(Date.now() + newTtl), req.ip, req.get('user-agent')]
