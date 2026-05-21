@@ -7,7 +7,9 @@ const pool     = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 
 const ACCESS_TTL  = '15m'
-const REFRESH_TTL = 30 * 24 * 60 * 60 * 1000  // 30 days ms
+const REFRESH_TTL        = 30 * 24 * 60 * 60 * 1000  // 30 days ms (default)
+const REFRESH_TTL_7DAY   =  7 * 24 * 60 * 60 * 1000  // 7 days — remember me
+const REFRESH_TTL_SESSION =  1 * 24 * 60 * 60 * 1000  // 1 day — no remember me
 const MAX_FAILS   = 10
 const LOCK_MIN    = 15
 
@@ -29,13 +31,13 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex')
 }
 
-function setRefreshCookie(res, token) {
+function setRefreshCookie(res, token, ttl = REFRESH_TTL) {
   res.cookie('lumen_refresh', token, {
     httpOnly: true,
     secure:   process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge:   REFRESH_TTL,
-    path:     '/',   // root path — required for cross-origin cookie to be sent on all requests
+    maxAge:   ttl,
+    path:     '/',
   })
 }
 
@@ -150,13 +152,16 @@ router.post('/login', async (req, res, next) => {
 
     await recordSuccess(user.id, email, req.ip)
 
+    const rememberMe = req.body.rememberMe !== false  // default true
+    const ttl = rememberMe ? REFRESH_TTL_7DAY : REFRESH_TTL_SESSION
+
     const refresh = makeRefreshToken()
     await pool.query(
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)',
-      [user.id, hashToken(refresh), new Date(Date.now() + REFRESH_TTL), req.ip, req.get('user-agent')]
+      [user.id, hashToken(refresh), new Date(Date.now() + ttl), req.ip, req.get('user-agent')]
     )
 
-    setRefreshCookie(res, refresh)
+    setRefreshCookie(res, refresh, ttl)
     res.json({ token: makeAccessToken(user), user: { id: user.id, email: user.email, name: user.name } })
   } catch (err) { next(err) }
 })
@@ -183,14 +188,18 @@ router.post('/refresh', async (req, res, next) => {
     const user = { id: row.user_id, email: row.email, name: row.name }
 
     // Rotate: revoke old, issue new
+    // Preserve remaining TTL from old token (don't extend on each refresh)
+    const remaining = new Date(row.expires_at).getTime() - Date.now()
+    const newTtl    = Math.max(remaining, 60 * 60 * 1000)  // at least 1 hour
+
     const newRefresh = makeRefreshToken()
     await pool.query('UPDATE refresh_tokens SET revoked=TRUE WHERE id=$1', [row.id])
     await pool.query(
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)',
-      [user.id, hashToken(newRefresh), new Date(Date.now() + REFRESH_TTL), req.ip, req.get('user-agent')]
+      [user.id, hashToken(newRefresh), new Date(Date.now() + newTtl), req.ip, req.get('user-agent')]
     )
 
-    setRefreshCookie(res, newRefresh)
+    setRefreshCookie(res, newRefresh, newTtl)
     res.json({ token: makeAccessToken(user), user })
   } catch (err) { next(err) }
 })
