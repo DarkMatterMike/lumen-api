@@ -3,7 +3,7 @@ const router   = express.Router()
 const bcrypt   = require('bcryptjs')
 const jwt      = require('jsonwebtoken')
 const crypto   = require('crypto')
-const { OAuth2Client } = require('google-auth-library')
+const { google } = require('googleapis')
 const pool     = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 
@@ -14,7 +14,14 @@ const REFRESH_1DAY = 1  * 24 * 60 * 60 * 1000   // 1 day  no remember me
 const MAX_FAILS    = 10
 const LOCK_MIN     = 15
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
+// Google OAuth2 client for login (separate redirect URI from Gmail)
+function getLoginOAuth2Client() {
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_LOGIN_REDIRECT_URI  // e.g. https://your-api.railway.app/api/auth/google/callback
+  )
+}
 
 // ── Cookie config ─────────────────────────────────────────────
 // COOKIE_SECURE=true must be set in Railway env vars
@@ -182,57 +189,81 @@ router.post('/login', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// ── POST /api/auth/google ─────────────────────────────────────
-// Client sends the Google ID token from the Google One Tap / popup flow.
-// We verify it server-side, then find-or-create the user and issue a session.
-router.post('/google', async (req, res, next) => {
+// ── GET /api/auth/google/redirect ────────────────────────────
+// Redirects the browser to Google's OAuth consent page
+router.get('/google/redirect', (req, res) => {
+  const oauth2 = getLoginOAuth2Client()
+  const url = oauth2.generateAuthUrl({
+    access_type: 'offline',
+    prompt:      'select_account',
+    scope: [
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ],
+  })
+  res.redirect(url)
+})
+
+// ── GET /api/auth/google/callback ─────────────────────────────
+// Google redirects here after user approves. Exchange code for user info,
+// then create/find user and redirect to frontend with session.
+router.get('/google/callback', async (req, res, next) => {
   try {
-    const { credential } = req.body
-    if (!credential) return res.status(400).json({ error: 'Missing Google credential' })
+    const { code, error } = req.query
+    const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:5173'
 
-    // Verify the ID token with Google
-    const ticket = await googleClient.verifyIdToken({
-      idToken:  credential,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    })
-    const payload = ticket.getPayload()
-    const { sub: googleId, email, name, picture } = payload
+    if (error || !code) {
+      return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent(error || 'cancelled')}`)
+    }
 
-    if (!email) return res.status(400).json({ error: 'Google account has no email' })
+    const oauth2 = getLoginOAuth2Client()
+    const { tokens } = await oauth2.getToken(code)
+    oauth2.setCredentials(tokens)
 
-    // Find existing user by Google ID or email
+    // Get user profile from Google
+    const peopleApi = google.oauth2({ version: 'v2', auth: oauth2 })
+    const { data }  = await peopleApi.userinfo.get()
+    const { id: googleId, email, name, picture } = data
+
+    if (!email) {
+      return res.redirect(`${FRONTEND}/?auth_error=no_email`)
+    }
+
+    // Find or create user
     let { rows } = await pool.query(
-      'SELECT id, email, name, google_id, oauth_provider FROM users WHERE google_id=$1 OR email=$2 LIMIT 1',
+      'SELECT id, email, name, google_id FROM users WHERE google_id=$1 OR email=$2 LIMIT 1',
       [googleId, email.toLowerCase()]
     )
     let user = rows[0]
 
     if (!user) {
-      // New user — create account
       const { rows: newRows } = await pool.query(
-        `INSERT INTO users (email, name, google_id, google_email, google_name, google_avatar, oauth_provider, terms_agreed_at, terms_version, privacy_agreed_at)
+        `INSERT INTO users
+           (email, name, google_id, google_email, google_name, google_avatar,
+            oauth_provider, terms_agreed_at, terms_version, privacy_agreed_at)
          VALUES ($1,$2,$3,$4,$5,$6,'google',NOW(),'1.0',NOW())
          RETURNING id, email, name`,
         [email.toLowerCase(), name, googleId, email.toLowerCase(), name, picture]
       )
       user = newRows[0]
     } else if (!user.google_id) {
-      // Existing email-password user — link Google account
+      // Link Google to existing email/password account
       await pool.query(
-        `UPDATE users SET google_id=$1, google_email=$2, google_name=$3, google_avatar=$4
-         WHERE id=$5`,
+        `UPDATE users SET google_id=$1, google_email=$2, google_name=$3, google_avatar=$4 WHERE id=$5`,
         [googleId, email.toLowerCase(), name, picture, user.id]
       )
     }
 
-    // Always issue 7-day session for Google login (they're already authenticated)
-    const token = await issueSession(res, user.id, user.email, user.name, REFRESH_7DAY, req.ip, req.get('user-agent'))
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name } })
+    // Issue session and store access token in cookie (refresh token in httpOnly cookie)
+    const accessToken = await issueSession(res, user.id, user.email, user.name, REFRESH_7DAY, req.ip, req.get('user-agent'))
+
+    // Redirect to frontend — pass the access token in the URL fragment (never logged)
+    // The frontend reads it once, stores in localStorage, then clears the fragment.
+    res.redirect(`${FRONTEND}/?google_token=${encodeURIComponent(accessToken)}`)
   } catch (err) {
-    if (err.message?.includes('Token used too late') || err.message?.includes('Invalid token')) {
-      return res.status(401).json({ error: 'Google sign-in expired. Please try again.' })
-    }
-    next(err)
+    console.error('[Google callback error]', err.message)
+    const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:5173'
+    res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Sign-in failed. Please try again.')}`)
   }
 })
 
