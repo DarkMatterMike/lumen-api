@@ -296,28 +296,24 @@ router.get('/google/callback', async (req, res, next) => {
 })
 
 // ── POST /api/auth/refresh ────────────────────────────────────
-// FIX: always issue fresh full-TTL cookie on rotation.
-// FIX: grace period duplicate requests get a new cookie too.
+// NO ROTATION — validate the refresh token and issue a new access token.
+// Rotation was the root cause of random logouts: any race condition between
+// concurrent tabs or network retries would invalidate the current cookie.
+// The refresh token stays stable for its full 7-day life.
 router.post('/refresh', async (req, res, next) => {
   try {
     const token = req.cookies?.lumen_refresh
     if (!token) return res.status(401).json({ error: 'No refresh token' })
 
-    const hash = hashToken(token)
-
-    // Accept valid tokens AND tokens revoked within the last 30s (race condition grace period)
     const { rows } = await pool.query(
-      `SELECT rt.id, rt.user_id, rt.revoked, rt.expires_at, rt.revoked_at,
+      `SELECT rt.user_id, rt.expires_at,
               u.email, u.name, u.role
        FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
        WHERE rt.token_hash = $1
-         AND rt.expires_at > NOW()
-         AND (
-           rt.revoked = FALSE
-           OR (rt.revoked = TRUE AND rt.revoked_at > NOW() - INTERVAL '30 seconds')
-         )`,
-      [hash]
+         AND rt.revoked = FALSE
+         AND rt.expires_at > NOW()`,
+      [hashToken(token)]
     )
 
     if (!rows.length) {
@@ -328,45 +324,7 @@ router.post('/refresh', async (req, res, next) => {
     const row  = rows[0]
     const user = { id: row.user_id, email: row.email, name: row.name, role: row.role || 'user' }
 
-    if (row.revoked) {
-      // Within grace period — find the replacement token that was issued
-      // and re-send it as the cookie so the browser stays in sync.
-      const { rows: replacements } = await pool.query(
-        `SELECT token_hash, expires_at
-         FROM refresh_tokens
-         WHERE user_id = $1
-           AND revoked = FALSE
-           AND expires_at > NOW()
-           AND created_at > $2
-         ORDER BY created_at DESC LIMIT 1`,
-        [row.user_id, row.revoked_at || new Date(Date.now() - 60000)]
-      )
-
-      // We can't re-send the raw token (only the hash is stored).
-      // Instead just issue a new access token — the browser's cookie
-      // from the first successful rotation is still valid.
-      const accessToken = makeAccessToken(user)
-      return res.json({ token: accessToken, user })
-    }
-
-    // Normal rotation: revoke old token and issue fresh 7-day token.
-    // KEY FIX: always use REFRESH_7DAY for the new token, not remaining TTL.
-    // This means every successful refresh extends the session by 7 days from now,
-    // so as long as you use the app every 7 days you stay logged in indefinitely.
-    const newRefresh = makeRefreshToken()
-    const newTtl     = REFRESH_7DAY   // ← FIXED: always full 7 days
-
-    await pool.query(
-      'UPDATE refresh_tokens SET revoked=TRUE, revoked_at=NOW() WHERE id=$1',
-      [row.id]
-    )
-    await pool.query(
-      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip, user_agent)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [user.id, hashToken(newRefresh), new Date(Date.now() + newTtl), req.ip, req.get('user-agent')]
-    )
-
-    setRefreshCookie(res, newRefresh, newTtl)
+    // Just issue a fresh 15-min access token. Cookie stays the same.
     res.json({ token: makeAccessToken(user), user })
   } catch (err) { next(err) }
 })

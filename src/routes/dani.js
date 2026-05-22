@@ -47,13 +47,13 @@ router.get('/', async (req, res, next) => {
       `SELECT
          id,
          name,
-         -- Negate bills/subscriptions so frontend can use amount < 0 for expenses
          CASE WHEN type = 'income' THEN amount ELSE -amount END AS amount,
-         day_of_month   AS "recurringDay",
-         'monthly'      AS "recurringFreq",
+         day_of_month                      AS "recurringDay",
+         COALESCE(frequency, 'monthly')    AS "recurringFreq",
+         COALESCE(start_date::text, NULL)  AS "recurringStart",
          type,
          icon,
-         account_id     AS "accountId"
+         account_id                        AS "accountId"
        FROM recurring
        WHERE user_id = $1 AND active = TRUE`,
       [uid]
