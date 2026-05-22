@@ -156,7 +156,9 @@ router.post('/register', async (req, res, next) => {
     )
     const user = rows[0]
     const token = await issueSession(res, user.id, user.email, user.name, REFRESH_7DAY, req.ip, req.get('user-agent'))
-    res.status(201).json({ token, user })
+    // Fetch role to include in response
+    const { rows: roleCheck } = await pool.query('SELECT role FROM users WHERE id=$1', [user.id])
+    res.status(201).json({ token, user: { ...user, role: roleCheck[0]?.role || 'user' } })
   } catch (err) { next(err) }
 })
 
@@ -191,7 +193,7 @@ router.post('/login', async (req, res, next) => {
     // rememberMe=true → 7 days, false → 1 day (session)
     const ttl = rememberMe ? REFRESH_7DAY : REFRESH_1DAY
     const token = await issueSession(res, user.id, user.email, user.name, ttl, req.ip, req.get('user-agent'))
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name } })
+    res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role || 'user' } })
   } catch (err) { next(err) }
 })
 
