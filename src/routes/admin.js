@@ -6,9 +6,16 @@ const router     = express.Router()
 const pool       = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 
-function requireOwner(req, res, next) {
-  if (req.user?.role !== 'owner') return res.status(403).json({ error: 'Access denied' })
-  next()
+async function requireOwner(req, res, next) {
+  try {
+    // Always re-check role from DB — JWT role can be stale if promoted recently
+    const { rows } = await pool.query('SELECT role FROM users WHERE id=$1', [req.user.id])
+    const role = rows[0]?.role || 'user'
+    if (role === 'owner') return next()
+    return res.status(403).json({ error: 'Access denied' })
+  } catch {
+    return res.status(403).json({ error: 'Could not verify role' })
+  }
 }
 
 router.use(requireAuth, requireOwner)
@@ -49,17 +56,27 @@ router.patch('/users/:id/role', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// DELETE /api/admin/users/:id — revoke all sessions permanently
+// DELETE /api/admin/users/:id — revoke all sessions
 router.delete('/users/:id', async (req, res, next) => {
   try {
     const targetId = Number(req.params.id)
+    if (!targetId) return res.status(400).json({ error: 'Invalid user ID' })
     if (targetId === req.user.id) {
       return res.status(400).json({ error: 'Cannot revoke your own account' })
     }
-    // Hard-delete refresh tokens so user cannot get new access tokens.
-    // Their current access token (≤15 min TTL) will expire on its own.
-    await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [targetId])
-    res.json({ ok: true })
+
+    // Verify target user exists
+    const { rows: target } = await pool.query('SELECT id, email FROM users WHERE id=$1', [targetId])
+    if (!target.length) return res.status(404).json({ error: 'User not found' })
+
+    // Mark all active refresh tokens as revoked (preserves audit trail)
+    const result = await pool.query(
+      'UPDATE refresh_tokens SET revoked=TRUE WHERE user_id=$1 AND revoked=FALSE',
+      [targetId]
+    )
+
+    console.log(`[Admin] ${req.user.email} revoked sessions for ${target[0].email} (${result.rowCount} tokens)`)
+    res.json({ ok: true, sessions_revoked: result.rowCount, email: target[0].email })
   } catch (err) { next(err) }
 })
 

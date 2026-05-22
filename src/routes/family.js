@@ -118,6 +118,38 @@ router.post('/join/:code', requireAuth, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ── POST /api/family/invite-email ────────────────────────────
+// Send a family invite email to a specific address
+router.post('/invite-email', requireAuth, requirePro, async (req, res, next) => {
+  try {
+    const { email, name } = req.body
+    if (!email) return res.status(400).json({ error: 'Email is required' })
+
+    // Owner must have a family group first
+    const { rows: groups } = await pool.query(
+      'SELECT * FROM family_groups WHERE owner_id=$1', [req.user.id]
+    )
+    if (!groups.length) {
+      return res.status(400).json({ error: 'Create a family group first' })
+    }
+
+    // Get the owner's name for the email
+    const { rows: ownerRows } = await pool.query(
+      'SELECT name, email FROM users WHERE id=$1', [req.user.id]
+    )
+    const ownerName = ownerRows[0]?.name || ownerRows[0]?.email || 'Someone'
+
+    await sendFamilyInvite({
+      toEmail:    email,
+      toName:     name || null,
+      fromName:   ownerName,
+      inviteCode: groups[0].invite_code,
+    })
+
+    res.json({ ok: true })
+  } catch (err) { next(err) }
+})
+
 // ── DELETE /api/family/members/:userId ───────────────────────
 router.delete('/members/:userId', requireAuth, requirePro, async (req, res, next) => {
   try {
