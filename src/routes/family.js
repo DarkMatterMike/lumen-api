@@ -5,14 +5,17 @@ const requireAuth = require('../middleware/requireAuth')
 const crypto  = require('crypto')
 
 async function requirePro(req, res, next) {
-  // Owners always have access
-  if (req.user.role === 'owner' || req.user.role === 'admin') return next()
-  // Check DB for tier (tier is not stored in JWT)
   try {
-    const { rows } = await pool.query('SELECT tier FROM users WHERE id=$1', [req.user.id])
-    if (rows[0]?.tier === 'pro') return next()
-  } catch {}
-  return res.status(403).json({ error: 'Family plan requires Lumen Pro', upgrade: true })
+    // tier column may not exist — check role from DB which is reliable
+    const { rows } = await pool.query(
+      'SELECT role FROM users WHERE id = $1', [req.user.id]
+    )
+    const role = rows[0]?.role || 'user'
+    if (role === 'owner' || role === 'admin') return next()
+    return res.status(403).json({ error: 'Family plan requires Lumen Pro', upgrade: true })
+  } catch (err) {
+    return res.status(403).json({ error: 'Could not verify plan' })
+  }
 }
 
 // ── GET /api/family/status ────────────────────────────────────
