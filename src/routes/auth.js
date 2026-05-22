@@ -176,7 +176,7 @@ router.post('/login', async (req, res, next) => {
     await checkLockout(email)
 
     const { rows } = await pool.query(
-      'SELECT id, email, name, password_hash, oauth_provider FROM users WHERE email=$1',
+      'SELECT id, email, name, password_hash, oauth_provider, locked FROM users WHERE email=$1',
       [email.toLowerCase()]
     )
     const user = rows[0]
@@ -190,6 +190,11 @@ router.post('/login', async (req, res, next) => {
     if (!user || !valid) {
       if (user) await recordFail(email, req.ip)
       return res.status(401).json({ error: 'Invalid email or password' })
+    }
+
+    // Block locked accounts
+    if (user.locked) {
+      return res.status(403).json({ error: 'This account has been suspended.' })
     }
 
     await recordSuccess(user.id, email, req.ip)
@@ -313,7 +318,7 @@ router.post('/refresh', async (req, res, next) => {
 
     const { rows } = await pool.query(
       `SELECT rt.user_id, rt.expires_at,
-              u.email, u.name, u.role
+              u.email, u.name, u.role, u.locked
        FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
        WHERE rt.token_hash = $1
@@ -325,6 +330,12 @@ router.post('/refresh', async (req, res, next) => {
     if (!rows.length) {
       clearRefreshCookie(res)
       return res.status(401).json({ error: 'Session expired. Please log in again.' })
+    }
+
+    // Account locked by admin
+    if (rows[0].locked) {
+      clearRefreshCookie(res)
+      return res.status(401).json({ error: 'Account has been suspended.' })
     }
 
     const row  = rows[0]

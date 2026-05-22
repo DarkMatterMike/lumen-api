@@ -17,7 +17,7 @@ router.use(requireAuth, requireOwner)
 router.get('/users', async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, email, name, role, created_at, terms_agreed_at,
+      `SELECT id, email, name, role, locked, created_at, terms_agreed_at,
               (SELECT COUNT(*) FROM accounts WHERE user_id = users.id) AS account_count,
               (SELECT COUNT(*) FROM transactions WHERE user_id = users.id) AS tx_count,
               (SELECT MAX(created_at) FROM refresh_tokens WHERE user_id = users.id AND revoked = FALSE AND expires_at > NOW()) AS last_active
@@ -25,6 +25,14 @@ router.get('/users', async (req, res, next) => {
        ORDER BY created_at DESC`
     )
     res.json({ users: rows })
+  } catch (err) { next(err) }
+})
+
+// PATCH /api/admin/users/:id/unlock — restore a locked account
+router.patch('/users/:id/unlock', async (req, res, next) => {
+  try {
+    await pool.query(`UPDATE users SET locked = FALSE WHERE id = $1`, [req.params.id])
+    res.json({ ok: true })
   } catch (err) { next(err) }
 })
 
@@ -49,17 +57,21 @@ router.patch('/users/:id/role', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// DELETE /api/admin/users/:id — soft delete (revoke all tokens, keep data)
+// DELETE /api/admin/users/:id — revoke all sessions + lock account
 router.delete('/users/:id', async (req, res, next) => {
   try {
     if (Number(req.params.id) === req.user.id) {
-      return res.status(400).json({ error: 'Cannot delete your own account via admin' })
+      return res.status(400).json({ error: 'Cannot revoke your own account via admin' })
     }
+    // Revoke all refresh tokens
     await pool.query(
       `UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1`, [req.params.id]
     )
-    // Optionally: DELETE FROM users WHERE id = $1  — uncomment for hard delete
-    res.json({ ok: true, message: 'All sessions revoked. User data preserved.' })
+    // Lock the account so they can't get new tokens even with a valid refresh cookie
+    await pool.query(
+      `UPDATE users SET locked = TRUE WHERE id = $1`, [req.params.id]
+    )
+    res.json({ ok: true, message: 'All sessions revoked and account locked.' })
   } catch (err) { next(err) }
 })
 
