@@ -92,20 +92,17 @@ function base({ title, preheader = '', body, accentLine = true }) {
             <table cellpadding="0" cellspacing="0" border="0">
               <tr>
                 <td style="padding-right:8px;vertical-align:middle;">
-                  <!--
-                    FIX 2: Replace radialGradient orb (Gmail strips SVG <defs> entirely).
-                    Use layered solid circles to simulate depth — no defs, no filter needed.
-                  -->
-                  <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                    <!-- Base dark outer ring -->
-                    <circle cx="12" cy="12" r="11" fill="${C.greenDark}"/>
-                    <!-- Mid layer -->
-                    <circle cx="12" cy="12" r="9" fill="${C.greenMid}"/>
-                    <!-- Bright center -->
-                    <circle cx="12" cy="12" r="7" fill="${C.green}"/>
-                    <!-- Highlight specular — no rgba, use solid with opacity attribute -->
-                    <ellipse cx="9.5" cy="8.5" rx="3" ry="2" fill="white" opacity="0.45" transform="rotate(-15 9.5 8.5)"/>
-                  </svg>
+                  <!-- Orb: table-based circle, no SVG — works in all email clients -->
+                  <table cellpadding="0" cellspacing="0" border="0" style="display:inline-table;">
+                    <tr>
+                      <td width="22" height="22"
+                          style="width:22px;height:22px;border-radius:50%;
+                                 background-color:${C.green};font-size:0;line-height:0;"
+                          bgcolor="${C.green}">
+                        &nbsp;
+                      </td>
+                    </tr>
+                  </table>
                 </td>
                 <td style="vertical-align:middle;">
                   <span style="font-family:${C.sans};font-size:20px;font-weight:300;color:#0f172a;letter-spacing:-0.3px;">Lumen</span>
@@ -157,7 +154,7 @@ function base({ title, preheader = '', body, accentLine = true }) {
 // ── Inner components ──────────────────────────────────────────
 
 function heading(text) {
-  return `<h1 style="margin:0 0 12px;font-family:${C.sans};font-size:24px;font-weight:600;color:${C.ink};line-height:1.3;letter-spacing:-0.3px;">${text}</h1>`
+  return `<h1 style="margin:0 0 16px;font-family:${C.sans};font-size:26px;font-weight:700;color:${C.ink};line-height:1.25;letter-spacing:-0.4px;">${text}</h1>`
 }
 
 function para(text, style = '') {
@@ -165,29 +162,19 @@ function para(text, style = '') {
 }
 
 function ctaButton(label, url, style = '') {
-  // FIX 4: VML button for Outlook + standard <a> for everyone else.
-  // The <a> uses line-height instead of padding so Gmail renders it reliably.
+  // Universally safe button: table cell with background-color + <a> that fills it.
+  // No conditional comments — they cause Gmail to hide the fallback.
+  // Outlook uses the td background; Gmail/Apple use the <a> styling.
   return `
-    <table cellpadding="0" cellspacing="0" border="0" style="margin-top:4px;margin-bottom:8px;${style}">
+    <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;margin-bottom:16px;${style}">
       <tr>
-        <td align="center">
-          <!--[if mso]>
-          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="${url}"
-            style="height:44px;v-text-anchor:middle;width:220px;"
-            arcsize="22%" strokecolor="${C.greenDark}" fillcolor="${C.green}">
-            <w:anchorlock/>
-            <center style="color:#ffffff;font-family:sans-serif;font-size:14px;font-weight:bold;">${label}</center>
-          </v:roundrect>
-          <![endif]-->
-          <!--[if !mso]><!-->
+        <td align="center" bgcolor="${C.green}" style="border-radius:8px;background-color:${C.green};">
           <a href="${url}" target="_blank"
-             style="background-color:${C.green};border-radius:8px;color:#ffffff;display:inline-block;
-                    font-family:${C.sans};font-size:14px;font-weight:600;line-height:44px;
-                    text-align:center;text-decoration:none;width:220px;
-                    -webkit-text-size-adjust:none;mso-hide:all;">
+             style="display:inline-block;padding:14px 36px;font-family:${C.sans};font-size:15px;
+                    font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;
+                    background-color:${C.green};letter-spacing:0.2px;white-space:nowrap;">
             ${label}
           </a>
-          <!--<![endif]-->
         </td>
       </tr>
     </table>`
@@ -200,14 +187,24 @@ function divider() {
 }
 
 function statTable(rows) {
-  const rowsHtml = rows.map(r => `
+  // Gmail strips border-bottom on <td>. Use a 1px spacer <tr> between rows instead.
+  const rowsHtml = rows.map((r, i) => {
+    const dataRow = `
     <tr>
-      <td style="padding:11px 0;font-family:${C.sans};font-size:13px;color:${C.ink2};border-bottom:1px solid ${C.borderLight};">${r.label}</td>
-      <td style="padding:11px 0;font-family:${C.mono};font-size:13px;color:${r.color || C.ink};text-align:right;border-bottom:1px solid ${C.borderLight};">${r.value}</td>
-    </tr>`).join('')
+      <td style="padding:11px 0 11px 0;font-family:${C.sans};font-size:13px;color:${C.ink2};">${r.label}</td>
+      <td style="padding:11px 0 11px 0;font-family:${C.mono};font-size:13px;color:${r.color || C.ink};text-align:right;">${r.value}</td>
+    </tr>`
+    // Add a 1px divider row after each row except the last
+    const divRow = i < rows.length - 1
+      ? `<tr><td colspan="2" height="1" style="height:1px;background-color:${C.borderLight};font-size:0;line-height:0;">&nbsp;</td></tr>`
+      : ''
+    return dataRow + divRow
+  }).join('')
   return `
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;border:1px solid ${C.borderLight};border-radius:8px;overflow:hidden;">
+      <tr><td colspan="2" height="1" style="background-color:${C.borderLight};font-size:0;line-height:0;">&nbsp;</td></tr>
       ${rowsHtml}
+      <tr><td colspan="2" height="1" style="background-color:${C.borderLight};font-size:0;line-height:0;">&nbsp;</td></tr>
     </table>`
 }
 
