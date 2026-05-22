@@ -3,6 +3,7 @@ const router  = express.Router()
 const pool    = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 const crypto  = require('crypto')
+const { sendFamilyInvite } = require('../utils/email')
 
 async function requirePro(req, res, next) {
   try {

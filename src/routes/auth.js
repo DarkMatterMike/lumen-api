@@ -5,6 +5,7 @@ const jwt      = require('jsonwebtoken')
 const crypto   = require('crypto')
 const { google } = require('googleapis')
 const pool     = require('../db/pool')
+const { sendWelcome } = require('../utils/email')
 const requireAuth = require('../middleware/requireAuth')
 
 // ── Constants ─────────────────────────────────────────────────
@@ -288,6 +289,8 @@ router.get('/google/callback', async (req, res, next) => {
       )
       user = newRows[0]
       console.log('[Google callback] New user created:', user.id)
+      // Welcome email for new Google signups
+      sendWelcome({ email: user.email, name: user.name }).catch(() => {})
     } else if (!user.google_id) {
       await pool.query(
         `UPDATE users SET google_id=$1, google_email=$2, google_name=$3, google_avatar=$4 WHERE id=$5`,

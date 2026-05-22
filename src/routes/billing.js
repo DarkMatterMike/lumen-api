@@ -2,6 +2,7 @@ const express = require('express')
 const router  = express.Router()
 const Stripe  = require('stripe')
 const pool    = require('../db/pool')
+const { sendSubscriptionConfirmed, sendSubscriptionCancelled, sendPaymentFailed } = require('../utils/email')
 const requireAuth = require('../middleware/requireAuth')
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_PLACEHOLDER')
@@ -131,6 +132,14 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         )
         await pool.query('UPDATE users SET tier=$1 WHERE id=$2', [plan, userId])
         console.log(`[Stripe] User ${userId} upgraded to ${plan}`)
+        // Send subscription confirmation email
+        try {
+          const { rows: uRows } = await pool.query('SELECT email, name FROM users WHERE id=$1', [userId])
+          if (uRows[0]) await sendSubscriptionConfirmed({
+            email: uRows[0].email, name: uRows[0].name,
+            plan, periodEnd: sub.current_period_end * 1000
+          })
+        } catch {}
         break
       }
       case 'invoice.payment_succeeded': {
@@ -152,6 +161,16 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
            WHERE stripe_sub_id=$1`,
           [invoice.subscription]
         )
+        // Notify user of payment failure
+        try {
+          const { rows: subRows2 } = await pool.query(
+            'SELECT user_id, tier FROM subscriptions WHERE stripe_sub_id=$1', [invoice.subscription]
+          )
+          if (subRows2[0]) {
+            const { rows: uRows2 } = await pool.query('SELECT email, name FROM users WHERE id=$1', [subRows2[0].user_id])
+            if (uRows2[0]) await sendPaymentFailed({ email: uRows2[0].email, name: uRows2[0].name, plan: subRows2[0].tier })
+          }
+        } catch {}
         break
       }
       case 'customer.subscription.deleted': {
@@ -162,9 +181,17 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
            WHERE stripe_sub_id=$1`,
           [event.data.object.id]
         )
-        if (userId) await pool.query(
-          `UPDATE users SET tier='free' WHERE id=$1 AND role != 'owner'`, [userId]
-        )
+        if (userId) {
+          await pool.query(`UPDATE users SET tier='free' WHERE id=$1 AND role != 'owner'`, [userId])
+          try {
+            const { rows: uRows } = await pool.query('SELECT email, name FROM users WHERE id=$1', [userId])
+            if (uRows[0]) await sendSubscriptionCancelled({
+              email: uRows[0].email, name: uRows[0].name,
+              plan: event.data.object.items?.data[0]?.price?.id?.includes('pro') ? 'pro' : 'plus',
+              periodEnd: event.data.object.current_period_end * 1000
+            })
+          } catch {}
+        }
         break
       }
       case 'customer.subscription.updated': {
