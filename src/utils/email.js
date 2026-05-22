@@ -1,82 +1,192 @@
 const { Resend } = require('resend')
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-const FROM   = process.env.EMAIL_FROM || 'Lumen <hello@lumenfinance.com>'
-const FRONTEND = process.env.FRONTEND_URL || 'https://lumenfinance.com'
+const resend   = new Resend(process.env.RESEND_API_KEY)
+const FROM     = process.env.EMAIL_FROM || 'Lumen <hello@lumenfinance.app>'
+const FRONTEND = process.env.FRONTEND_URL || 'https://lumenfinance.app'
 
-// ── Brand colors ─────────────────────────────────────────────
+// ── Brand tokens ──────────────────────────────────────────────
 const C = {
-  bg:    '#040608',
-  card:  '#0d1117',
-  border:'#1c2230',
-  safe:  '#5dcaa5',
-  ink0:  '#f4f4f1',
-  ink2:  '#7c8494',
-  ink3:  '#4a5161',
+  green:      '#5dcaa5',
+  greenLight: '#edfaf4',
+  greenDark:  '#1a6b52',
+  red:        '#e87363',
+  redLight:   '#fff0ee',
+  amber:      '#f0b04c',
+  bg:         '#f6f8fa',       // page background — light grey
+  surface:    '#ffffff',       // card surface
+  border:     '#e2e8f0',       // card border
+  borderLight:'#f1f5f9',       // inner dividers
+  ink:        '#0f172a',       // primary text
+  ink2:       '#475569',       // secondary text
+  ink3:       '#94a3b8',       // muted text
+  mono:       'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
+  sans:       '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
 }
 
-// ── Base template wrapper ─────────────────────────────────────
-function base({ title, preheader = '', body }) {
+// ── Email-safe inline styles ──────────────────────────────────
+// Using tables for layout because Outlook. All styles are inline.
+
+function base({ title, preheader = '', body, accentLine = true }) {
+  const accent = accentLine
+    ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:32px;">
+         <tr><td height="3" style="background:linear-gradient(90deg,${C.green} 0%,${C.greenDark} 100%);border-radius:2px;font-size:0;line-height:0;">&nbsp;</td></tr>
+       </table>`
+    : ''
+
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title>
-<style>
-  body,html{margin:0;padding:0;background:${C.bg};font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;}
-  .wrap{max-width:560px;margin:0 auto;padding:40px 20px 60px;}
-  .logo{text-align:center;margin-bottom:32px;}
-  .logo-text{font-size:28px;font-weight:300;color:${C.safe};letter-spacing:-0.5px;}
-  .logo-dot{display:inline-block;width:8px;height:8px;background:${C.safe};border-radius:50%;margin-right:6px;vertical-align:middle;box-shadow:0 0 10px rgba(93,202,165,.6);}
-  .card{background:${C.card};border:1px solid ${C.border};border-radius:16px;padding:32px 32px;margin-bottom:16px;}
-  .card-title{font-size:22px;font-weight:300;color:${C.ink0};margin:0 0 8px;line-height:1.3;}
-  .card-body{font-size:14px;color:${C.ink2};line-height:1.7;margin:0 0 24px;}
-  .card-body strong{color:${C.ink0};font-weight:500;}
-  .btn{display:inline-block;padding:13px 28px;background:rgba(93,202,165,.1);border:1px solid rgba(93,202,165,.35);border-radius:10px;color:${C.safe};text-decoration:none;font-size:12px;font-family:monospace;letter-spacing:1px;text-transform:uppercase;}
-  .btn:hover{background:${C.safe};color:#040608;}
-  .divider{border:none;border-top:1px solid ${C.border};margin:24px 0;}
-  .meta{font-size:11px;color:${C.ink3};line-height:1.6;}
-  .meta a{color:${C.ink2};text-decoration:none;}
-  .stat-row{display:flex;justify-content:space-between;align-items:baseline;padding:10px 0;border-bottom:1px solid ${C.border};}
-  .stat-row:last-child{border-bottom:none;}
-  .stat-label{font-size:12px;color:${C.ink2};}
-  .stat-val{font-size:14px;color:${C.ink0};font-family:monospace;}
-  .stat-val.green{color:${C.safe};}
-  .stat-val.red{color:#e87363;}
-  .footer{text-align:center;padding-top:8px;}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>${title}</title>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
 </head>
-<body>
-<!-- preheader hidden -->
-<div style="display:none;max-height:0;overflow:hidden;">${preheader}</div>
-<div class="wrap">
-  <div class="logo">
-    <span class="logo-dot"></span>
-    <span class="logo-text">Lumen</span>
-  </div>
-  ${body}
-  <div class="footer">
-    <p class="meta">
-      Your financial picture, clearly.<br>
-      <a href="${FRONTEND}/settings">Manage preferences</a> &nbsp;·&nbsp;
-      <a href="${FRONTEND}/privacy">Privacy Policy</a>
-    </p>
-  </div>
-</div>
+<body style="margin:0;padding:0;background-color:${C.bg};font-family:${C.sans};-webkit-font-smoothing:antialiased;">
+
+<!-- Preheader (hidden) -->
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+
+<!-- Outer wrapper -->
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${C.bg};min-width:100%;">
+  <tr>
+    <td align="center" style="padding:40px 16px 60px;">
+
+      <!-- Inner container -->
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+
+        <!-- Logo header -->
+        <tr>
+          <td align="center" style="padding-bottom:28px;">
+            <table cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="padding-right:8px;vertical-align:middle;">
+                  <!-- Orb SVG -->
+                  <svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <radialGradient id="orb" cx="35%" cy="32%" r="65%">
+                        <stop offset="0%" stop-color="#d4fff0"/>
+                        <stop offset="18%" stop-color="#7fffd4"/>
+                        <stop offset="48%" stop-color="${C.green}"/>
+                        <stop offset="78%" stop-color="#1a7a5e"/>
+                        <stop offset="100%" stop-color="#082e1e"/>
+                      </radialGradient>
+                    </defs>
+                    <circle cx="11" cy="11" r="10" fill="url(#orb)" filter="drop-shadow(0 0 4px rgba(93,202,165,.5))"/>
+                    <ellipse cx="8.5" cy="8" rx="2.8" ry="2" fill="rgba(255,255,255,.55)" transform="rotate(-20 8.5 8)"/>
+                  </svg>
+                </td>
+                <td style="vertical-align:middle;">
+                  <span style="font-family:${C.sans};font-size:20px;font-weight:300;color:#0f172a;letter-spacing:-0.3px;">Lumen</span>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Card -->
+        <tr>
+          <td style="background-color:${C.surface};border:1px solid ${C.border};border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04);">
+            ${accent}
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="padding:32px 36px 36px;">
+                  ${body}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td align="center" style="padding-top:24px;">
+            <p style="margin:0;font-family:${C.sans};font-size:11px;color:${C.ink3};line-height:1.6;">
+              Your financial picture, clearly.
+            </p>
+            <p style="margin:6px 0 0;font-family:${C.sans};font-size:11px;color:${C.ink3};line-height:1.6;">
+              <a href="${FRONTEND}/settings" style="color:${C.ink3};text-decoration:underline;">Manage preferences</a>
+              &nbsp;&middot;&nbsp;
+              <a href="${FRONTEND}/privacy" style="color:${C.ink3};text-decoration:underline;">Privacy Policy</a>
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
 </body>
 </html>`
 }
 
-// ── Send helper — never throws, always logs ───────────────────
+// ── Reusable inner components ─────────────────────────────────
+
+function heading(text) {
+  return `<h1 style="margin:0 0 12px;font-family:${C.sans};font-size:24px;font-weight:600;color:${C.ink};line-height:1.3;letter-spacing:-0.3px;">${text}</h1>`
+}
+
+function para(text, style = '') {
+  return `<p style="margin:0 0 20px;font-family:${C.sans};font-size:15px;color:${C.ink2};line-height:1.7;${style}">${text}</p>`
+}
+
+function ctaButton(label, url, style = '') {
+  return `
+    <table cellpadding="0" cellspacing="0" border="0" style="margin-top:4px;margin-bottom:8px;${style}">
+      <tr>
+        <td align="center" style="border-radius:10px;background-color:${C.green};">
+          <a href="${url}" target="_blank"
+             style="display:inline-block;padding:13px 32px;font-family:${C.sans};font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;letter-spacing:0.1px;">
+            ${label}
+          </a>
+        </td>
+      </tr>
+    </table>`
+}
+
+function divider() {
+  return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0;">
+    <tr><td height="1" style="background-color:${C.borderLight};font-size:0;line-height:0;">&nbsp;</td></tr>
+  </table>`
+}
+
+function statTable(rows) {
+  // rows: [{ label, value, color? }]
+  const rowsHtml = rows.map(r => `
+    <tr>
+      <td style="padding:11px 0;font-family:${C.sans};font-size:13px;color:${C.ink2};border-bottom:1px solid ${C.borderLight};">${r.label}</td>
+      <td style="padding:11px 0;font-family:${C.mono};font-size:13px;color:${r.color || C.ink};text-align:right;border-bottom:1px solid ${C.borderLight};">${r.value}</td>
+    </tr>`).join('')
+  return `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+      ${rowsHtml}
+    </table>`
+}
+
+function badge(text, color = C.green, bg = C.greenLight) {
+  return `<span style="display:inline-block;padding:3px 10px;background-color:${bg};color:${color};font-family:${C.sans};font-size:11px;font-weight:600;border-radius:20px;letter-spacing:0.3px;text-transform:uppercase;">${text}</span>`
+}
+
+function note(text) {
+  return `<p style="margin:16px 0 0;font-family:${C.sans};font-size:12px;color:${C.ink3};line-height:1.6;">${text}</p>`
+}
+
+// ── Send helper ───────────────────────────────────────────────
 async function send({ to, subject, html, text }) {
   try {
     const result = await resend.emails.send({
       from: FROM, to, subject, html,
       text: text || subject,
     })
-    console.log(`[Email] Sent "${subject}" to ${to}`, result.id)
-    return result
+    if (result.error) {
+      console.error(`[Email] Resend error for "${subject}" to ${to}:`, JSON.stringify(result.error))
+      return null
+    }
+    console.log(`[Email] Sent "${subject}" to ${to} — id: ${result.data?.id}`)
+    return result.data
   } catch (err) {
     console.error(`[Email] Failed to send "${subject}" to ${to}:`, err.message)
     return null
@@ -87,134 +197,78 @@ async function send({ to, subject, html, text }) {
 // TEMPLATES
 // ══════════════════════════════════════════════════════════════
 
-// 1. Welcome email ─────────────────────────────────────────────
+// 1. Welcome ───────────────────────────────────────────────────
 async function sendWelcome({ email, name }) {
   const firstName = (name || email).split(' ')[0].split('@')[0]
   const html = base({
-    title: `Welcome to Lumen`,
-    preheader: `Your financial picture starts now.`,
+    title: 'Welcome to Lumen',
+    preheader: 'Your financial picture starts now.',
     body: `
-      <div class="card">
-        <div class="card-title">Welcome, ${firstName}.</div>
-        <p class="card-body">
-          Lumen is now tracking your financial picture. Here's what to do first:
-        </p>
-        <div style="margin-bottom:24px;">
-          <div class="stat-row">
-            <span class="stat-label">① Add an account</span>
-            <span class="stat-val">Connect bank or enter manually</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">② Set up recurring items</span>
-            <span class="stat-val">Bills, subscriptions, paychecks</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">③ Create a budget</span>
-            <span class="stat-val">Pick one category to start</span>
-          </div>
-        </div>
-        <a href="${FRONTEND}/dashboard" class="btn">Open Lumen →</a>
-      </div>
-      <div class="card">
-        <p class="meta" style="margin:0;">
-          Lumen reads your balance, upcoming bills, and spending patterns in real time.
-          The big number on your dashboard is what you can actually spend today —
-          after all bills due in the next 30 days.
-        </p>
-      </div>`
+      ${heading(`Welcome, ${firstName}.`)}
+      ${para('Lumen is now tracking your financial picture. Here\'s how to get the most out of it:')}
+      ${statTable([
+        { label: '① Connect an account',       value: 'Bank sync or manual entry' },
+        { label: '② Add your recurring items',  value: 'Bills, paycheck, subscriptions' },
+        { label: '③ Set one budget',             value: 'Pick a category to track' },
+      ])}
+      ${ctaButton('Open Lumen →', `${FRONTEND}/dashboard`)}
+      ${divider()}
+      ${note('The big number on your dashboard is what you can actually spend — after all bills due before your next paycheck.')}
+    `
   })
   return send({ to: email, subject: 'Welcome to Lumen', html,
     text: `Welcome to Lumen, ${firstName}. Open your dashboard: ${FRONTEND}/dashboard` })
 }
 
-// 2. Family invite email ───────────────────────────────────────
+// 2. Family invite ─────────────────────────────────────────────
 async function sendFamilyInvite({ toEmail, toName, fromName, inviteCode }) {
   const inviteUrl = `${FRONTEND}/family/join/${inviteCode}`
   const html = base({
     title: "You've been invited to Lumen",
-    preheader: `${fromName} wants to share their financial picture with you.`,
+    preheader: `${fromName} invited you to their Lumen family plan.`,
     body: `
-      <div class="card">
-        <div class="card-title">${fromName} invited you to their family plan.</div>
-        <p class="card-body">
-          You've been invited to join <strong>${fromName}'s</strong> Lumen family plan.
-          You'll be able to see shared accounts and transactions, and keep individual
-          items private to yourself.
-        </p>
-        <div style="margin-bottom:24px;">
-          <div class="stat-row">
-            <span class="stat-label">Shared accounts</span>
-            <span class="stat-val green">Visible</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Shared transactions</span>
-            <span class="stat-val green">Visible</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Private transactions</span>
-            <span class="stat-val">Your choice</span>
-          </div>
-        </div>
-        <a href="${inviteUrl}" class="btn">Accept Invite →</a>
-      </div>
-      <div class="card">
-        <p class="meta" style="margin:0;">
-          This invite link is unique and can only be used once. If you don't have a
-          Lumen account yet, you'll be able to create one after clicking the link.
-          Link expires in 7 days.
-        </p>
-      </div>`
+      ${heading(`${fromName} invited you.`)}
+      ${para(`<strong style="color:${C.ink};">${fromName}</strong> wants to share their financial picture with you on Lumen — a personal finance app that tracks balances, bills, and spending in real time.`)}
+      ${statTable([
+        { label: 'Shared accounts',      value: 'Visible',     color: C.greenDark },
+        { label: 'Shared transactions',  value: 'Visible',     color: C.greenDark },
+        { label: 'Private items',        value: 'Your choice', color: C.ink2 },
+      ])}
+      ${ctaButton('Accept Invite →', inviteUrl)}
+      ${note(`This link is unique to you and expires in 7 days. If you don't have a Lumen account yet, you can create one after clicking the link.`)}
+    `
   })
   const toAddr = toName ? `${toName} <${toEmail}>` : toEmail
   return send({ to: toAddr, subject: `${fromName} invited you to Lumen`, html,
-    text: `${fromName} invited you to join their Lumen family plan. Accept: ${inviteUrl}` })
+    text: `${fromName} invited you to their Lumen family plan. Accept here: ${inviteUrl}` })
 }
 
-// 3. Subscription confirmation ─────────────────────────────────
+// 3. Subscription confirmed ────────────────────────────────────
 async function sendSubscriptionConfirmed({ email, name, plan, periodEnd }) {
   const firstName = (name || email).split(' ')[0]
   const planLabel = plan === 'pro' ? 'Lumen Pro' : 'Lumen Plus'
-  const price     = plan === 'pro' ? '$9.99' : '$4.99'
+  const price     = plan === 'pro' ? '$9.99/mo' : '$4.99/mo'
   const perks     = plan === 'pro'
     ? ['Live bank sync via Plaid', 'Family plan (up to 3 members)', 'Per-transaction privacy controls']
     : ['Live bank sync via Plaid', 'Auto transaction import', 'Real-time balance updates']
-  const endDate = periodEnd
+  const endDate   = periodEnd
     ? new Date(periodEnd).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : 'next month'
 
   const html = base({
-    title: `You're now on ${planLabel}`,
-    preheader: `${planLabel} is active. Thank you for subscribing.`,
+    title: `You're on ${planLabel}`,
+    preheader: `${planLabel} is active. Thank you.`,
     body: `
-      <div class="card">
-        <div class="card-title">You're on ${planLabel}, ${firstName}.</div>
-        <p class="card-body">
-          Your subscription is active. Here's what you now have access to:
-        </p>
-        <div style="margin-bottom:24px;">
-          ${perks.map(p => `
-          <div class="stat-row">
-            <span class="stat-label">✓ &nbsp;${p}</span>
-            <span class="stat-val green">Active</span>
-          </div>`).join('')}
-          <div class="stat-row">
-            <span class="stat-label">Next billing date</span>
-            <span class="stat-val">${endDate}</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Amount</span>
-            <span class="stat-val">${price}/mo</span>
-          </div>
-        </div>
-        <a href="${FRONTEND}/accounts" class="btn">Connect Your Bank →</a>
-      </div>
-      <div class="card">
-        <p class="meta" style="margin:0;">
-          You can manage or cancel your subscription anytime in
-          <a href="${FRONTEND}/settings">Settings → Plan</a>.
-          Questions? Reply to this email.
-        </p>
-      </div>`
+      ${heading(`You're on ${planLabel}, ${firstName}.`)}
+      ${para('Your subscription is active and all features are unlocked.')}
+      ${statTable([
+        ...perks.map(p => ({ label: `✓ ${p}`, value: 'Active', color: C.greenDark })),
+        { label: 'Next billing date', value: endDate },
+        { label: 'Amount',            value: price },
+      ])}
+      ${ctaButton('Connect Your Bank →', `${FRONTEND}/accounts`)}
+      ${note(`Manage or cancel anytime in <a href="${FRONTEND}/settings" style="color:${C.ink2};">Settings → Plan</a>. Questions? Reply to this email.`)}
+    `
   })
   return send({ to: email, subject: `You're now on ${planLabel} — welcome`, html,
     text: `Your ${planLabel} subscription is active. Manage at ${FRONTEND}/settings` })
@@ -229,35 +283,21 @@ async function sendSubscriptionCancelled({ email, name, plan, periodEnd }) {
     : 'end of billing period'
 
   const html = base({
-    title: `Your ${planLabel} subscription has ended`,
-    preheader: `Your plan has been downgraded to Free.`,
+    title: `Your ${planLabel} plan has ended`,
+    preheader: 'Your plan has been downgraded to Free.',
     body: `
-      <div class="card">
-        <div class="card-title">Your ${planLabel} plan has ended.</div>
-        <p class="card-body">
-          ${firstName}, your ${planLabel} subscription ended on <strong>${endDate}</strong>.
-          Your account has been moved to the free plan. Your data is all still there —
-          you just won't have access to paid features until you resubscribe.
-        </p>
-        <div style="margin-bottom:24px;">
-          <div class="stat-row">
-            <span class="stat-label">Bank sync (Plaid)</span>
-            <span class="stat-val red">Paused</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Your transactions & budgets</span>
-            <span class="stat-val green">Safe</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Manual entry & CSV import</span>
-            <span class="stat-val green">Still available</span>
-          </div>
-        </div>
-        <a href="${FRONTEND}/pricing" class="btn">Resubscribe →</a>
-      </div>`
+      ${heading('Your plan has ended.')}
+      ${para(`${firstName}, your <strong style="color:${C.ink};">${planLabel}</strong> subscription ended on ${endDate}. Your account is now on the free plan — your data is all still there.`)}
+      ${statTable([
+        { label: 'Bank sync (Plaid)',          value: 'Paused',         color: C.red },
+        { label: 'Your transactions & budgets', value: 'Safe',           color: C.greenDark },
+        { label: 'Manual entry & CSV import',   value: 'Still available',color: C.greenDark },
+      ])}
+      ${ctaButton('Resubscribe →', `${FRONTEND}/pricing`)}
+    `
   })
   return send({ to: email, subject: `Your ${planLabel} subscription has ended`, html,
-    text: `Your ${planLabel} plan ended. Your data is safe. Resubscribe at ${FRONTEND}/pricing` })
+    text: `Your ${planLabel} plan ended on ${endDate}. Your data is safe. Resubscribe at ${FRONTEND}/pricing` })
 }
 
 // 5. Payment failed ────────────────────────────────────────────
@@ -265,23 +305,15 @@ async function sendPaymentFailed({ email, name, plan }) {
   const firstName = (name || email).split(' ')[0]
   const planLabel = plan === 'pro' ? 'Lumen Pro' : 'Lumen Plus'
   const html = base({
-    title: "Payment issue with your Lumen subscription",
+    title: 'Payment issue with your Lumen subscription',
     preheader: 'Action needed — update your payment method.',
     body: `
-      <div class="card">
-        <div class="card-title">We couldn't process your payment.</div>
-        <p class="card-body">
-          ${firstName}, the payment for your <strong>${planLabel}</strong> subscription
-          didn't go through. This is usually a temporary issue with your card.
-          Update your payment method to keep your plan active.
-        </p>
-        <a href="${FRONTEND}/settings" class="btn" style="margin-bottom:16px;display:inline-block;">Update Payment →</a>
-        <hr class="divider">
-        <p class="meta" style="margin:0;">
-          We'll try again in a few days. If payment continues to fail, your account
-          will be moved to the free plan. Your data will remain safe.
-        </p>
-      </div>`
+      ${heading("We couldn't process your payment.")}
+      ${para(`${firstName}, the payment for your <strong style="color:${C.ink};">${planLabel}</strong> subscription didn't go through. This is usually a temporary issue with your card.`)}
+      ${ctaButton('Update Payment Method →', `${FRONTEND}/settings`)}
+      ${divider()}
+      ${note("We'll try again in a few days. If payment continues to fail your account will be moved to the free plan. Your data will remain safe.")}
+    `
   })
   return send({ to: email, subject: 'Action needed — Lumen payment failed', html,
     text: `We couldn't process your ${planLabel} payment. Update at ${FRONTEND}/settings` })
@@ -292,21 +324,15 @@ async function sendPasswordChanged({ email, name }) {
   const firstName = (name || email).split(' ')[0]
   const now = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
   const html = base({
-    title: "Your Lumen password was changed",
+    title: 'Your Lumen password was changed',
     preheader: 'Security notice — your password was updated.',
     body: `
-      <div class="card">
-        <div class="card-title">Password changed.</div>
-        <p class="card-body">
-          ${firstName}, your Lumen password was changed on <strong>${now}</strong>.
-          If you made this change, you're all set — no action needed.
-        </p>
-        <p class="card-body" style="margin-bottom:24px;">
-          If you <strong>did not</strong> make this change, your account may be compromised.
-          Reset your password immediately.
-        </p>
-        <a href="${FRONTEND}/settings" class="btn">Secure My Account →</a>
-      </div>`
+      ${heading('Password changed.')}
+      ${para(`${firstName}, your Lumen password was changed on <strong style="color:${C.ink};">${now}</strong>.`)}
+      ${para('If you made this change — you\'re all set, no action needed.')}
+      ${para(`If you <strong style="color:${C.ink};">did not</strong> make this change, your account may be compromised. Secure it immediately.`)}
+      ${ctaButton('Secure My Account →', `${FRONTEND}/settings`)}
+    `
   })
   return send({ to: email, subject: 'Your Lumen password was changed', html,
     text: `Your Lumen password was changed at ${now}. If this wasn't you, go to ${FRONTEND}/settings` })
@@ -317,39 +343,29 @@ async function sendWeeklyDigest({ email, name, stats }) {
   const firstName = (name || email).split(' ')[0]
   const { balance = 0, spent = 0, upcomingBills = [], nextPaycheck } = stats
   const fmt = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  const rows = [
+    { label: 'Available balance', value: `$${fmt(balance)}`, color: C.greenDark },
+    { label: 'Spent this week',   value: `$${fmt(spent)}` },
+  ]
+  if (nextPaycheck) {
+    rows.push({ label: 'Next paycheck', value: `$${fmt(nextPaycheck.amount)} in ${nextPaycheck.daysUntil}d`, color: C.greenDark })
+  }
+  upcomingBills.slice(0, 4).forEach(b => {
+    rows.push({ label: b.name, value: `−$${fmt(b.amount)} in ${b.daysUntil}d`, color: C.red })
+  })
+
   const html = base({
     title: 'Your Lumen weekly summary',
     preheader: `Balance: $${fmt(balance)} · ${upcomingBills.length} bills coming up`,
     body: `
-      <div class="card">
-        <div class="card-title">Your week at a glance, ${firstName}.</div>
-        <div>
-          <div class="stat-row">
-            <span class="stat-label">Current balance</span>
-            <span class="stat-val green">$${fmt(balance)}</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Spent this week</span>
-            <span class="stat-val">$${fmt(spent)}</span>
-          </div>
-          ${nextPaycheck ? `
-          <div class="stat-row">
-            <span class="stat-label">Next paycheck</span>
-            <span class="stat-val green">$${fmt(nextPaycheck.amount)} in ${nextPaycheck.daysUntil} days</span>
-          </div>` : ''}
-          ${upcomingBills.slice(0, 4).map(b => `
-          <div class="stat-row">
-            <span class="stat-label">${b.name}</span>
-            <span class="stat-val red">−$${fmt(b.amount)} in ${b.daysUntil} days</span>
-          </div>`).join('')}
-        </div>
-      </div>
-      <div class="card" style="text-align:center;">
-        <a href="${FRONTEND}/dashboard" class="btn">Open Dashboard →</a>
-      </div>`
+      ${heading(`Your week, ${firstName}.`)}
+      ${statTable(rows)}
+      ${ctaButton('Open Dashboard →', `${FRONTEND}/dashboard`)}
+    `
   })
-  return send({ to: email, subject: `Your Lumen summary — $${fmt(balance)} available`, html,
-    text: `Balance: $${fmt(balance)}. Spent this week: $${fmt(spent)}. Open: ${FRONTEND}/dashboard` })
+  return send({ to: email, subject: `Lumen weekly — $${fmt(balance)} available`, html,
+    text: `Balance: $${fmt(balance)}. Spent: $${fmt(spent)}. Open: ${FRONTEND}/dashboard` })
 }
 
 module.exports = {
