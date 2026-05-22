@@ -131,7 +131,7 @@ async function sendWelcome({ email, name }) {
 async function sendFamilyInvite({ toEmail, toName, fromName, inviteCode }) {
   const inviteUrl = `${FRONTEND}/family/join/${inviteCode}`
   const html = base({
-    title: 'You've been invited to Lumen',
+    title: "You've been invited to Lumen",
     preheader: `${fromName} wants to share their financial picture with you.`,
     body: `
       <div class="card">
@@ -265,7 +265,7 @@ async function sendPaymentFailed({ email, name, plan }) {
   const firstName = (name || email).split(' ')[0]
   const planLabel = plan === 'pro' ? 'Lumen Pro' : 'Lumen Plus'
   const html = base({
-    title: 'Payment issue with your Lumen subscription',
+    title: "Payment issue with your Lumen subscription",
     preheader: 'Action needed — update your payment method.',
     body: `
       <div class="card">
@@ -292,7 +292,7 @@ async function sendPasswordChanged({ email, name }) {
   const firstName = (name || email).split(' ')[0]
   const now = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
   const html = base({
-    title: 'Your Lumen password was changed',
+    title: "Your Lumen password was changed",
     preheader: 'Security notice — your password was updated.',
     body: `
       <div class="card">
