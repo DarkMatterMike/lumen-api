@@ -25,7 +25,11 @@ function getLoginOAuth2Client() {
 
 // ── Cookie config ─────────────────────────────────────────────
 // COOKIE_SECURE=true must be set in Railway env vars
-const IS_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production'
+// On Railway, RAILWAY_ENVIRONMENT is always set. Use that as the production signal
+// rather than NODE_ENV which is often not configured explicitly.
+const IS_SECURE = process.env.COOKIE_SECURE === 'true'
+  || process.env.NODE_ENV === 'production'
+  || !!process.env.RAILWAY_ENVIRONMENT
 
 // ── Token helpers ─────────────────────────────────────────────
 function makeAccessToken(user) {
