@@ -36,6 +36,8 @@ const exportRoutes        = require('./routes/export')
 const recurringDetectRoute = require('./routes/recurringDetect')
 const daniRoutes          = require('./routes/dani')
 const adminRoutes         = require('./routes/admin')
+const billingRoutes       = require('./routes/billing')
+const familyRoutes        = require('./routes/family')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -139,6 +141,8 @@ app.use('/api/reports',      reportsRoutes)
 app.use('/api/export',       exportRoutes)
 app.use('/api/recurring-detect', recurringDetectRoute)
 app.use('/api/dani',         daniRoutes)
+app.use('/api/billing',      billingRoutes)
+app.use('/api/family',       familyRoutes)
 app.use('/api/admin',        adminRoutes)
 
 app.use((req, res) => {

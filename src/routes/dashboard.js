@@ -29,29 +29,47 @@ router.get('/', async (req, res, next) => {
       [uid]
     )
 
-    // Expand occurrences for this month, filter to on/after today
+    // Rolling 30-day window — crosses month boundary so Rent on the 1st
+    // shows up when it's still the 28th of the prior month.
+    const window30End = new Date(today)
+    window30End.setDate(window30End.getDate() + 30)
+
     const remainingExpenses = []
     const remainingIncome   = []
 
-    for (const r of allRecurring) {
-      const dates = getOccurrencesForMonth(r, year, month)
-      for (const d of dates) {
-        if (d.getDate() >= todayDay) {
-          if (r.type === 'income') {
-            remainingIncome.push({ ...r, day_of_month: d.getDate(), daysUntil: Math.max(0, Math.ceil((d - today) / 86400000)) })
-          } else {
-            remainingExpenses.push({ ...r, day_of_month: d.getDate(), daysUntil: Math.max(0, Math.ceil((d - today) / 86400000)) })
+    // Check this month AND next month to cover the rolling window
+    for (const monthOffset of [0, 1]) {
+      const y = month + monthOffset > 11 ? year + 1 : year
+      const m = (month + monthOffset) % 12
+      for (const r of allRecurring) {
+        const dates = getOccurrencesForMonth(r, y, m)
+        for (const d of dates) {
+          // Include only dates from today through today+30 days
+          if (d >= today && d <= window30End) {
+            const daysUntil = Math.max(0, Math.ceil((d - today) / 86400000))
+            const entry = { ...r, _date: d, day_of_month: d.getDate(), month: m, daysUntil }
+            if (r.type === 'income') {
+              remainingIncome.push(entry)
+            } else {
+              remainingExpenses.push(entry)
+            }
           }
         }
       }
     }
 
-    remainingExpenses.sort((a, b) => a.day_of_month - b.day_of_month)
-    remainingIncome.sort((a, b) => a.day_of_month - b.day_of_month)
+    // Sort by actual date
+    remainingExpenses.sort((a, b) => a._date - b._date)
+    remainingIncome.sort((a, b) => a._date - b._date)
 
     const committedBills    = remainingExpenses.reduce((s, r) => s + Number(r.amount), 0)
     const upcomingPayTotal  = remainingIncome.reduce((s, r) => s + Number(r.amount), 0)
-    const balanceAfterBills = balance - committedBills + upcomingPayTotal
+
+    // Hero = current spendable (balance minus bills in next 30 days)
+    // Income is shown in narrative but not added to hero — user hasn't earned it yet
+    const freeToSpend       = balance - committedBills
+    const balanceAfterBills = freeToSpend  // for compatibility
+    const nextBillCluster   = remainingExpenses.slice(0, 3)  // nearest 3 bills for narrative
 
     const { rows: monthSpend } = await pool.query(
       `SELECT
@@ -86,13 +104,16 @@ router.get('/', async (req, res, next) => {
 
     const upcomingBills = remainingExpenses.slice(0, 5)
     const nextPaycheck  = remainingIncome[0] || null
+    const next3Bills    = nextBillCluster
+    const bills30Days   = committedBills
+    const income30Days  = upcomingPayTotal
 
     res.json({
-      balance, balanceAfterBills, balanceAfterPlans, committedBills, upcomingPayTotal,
+      balance, freeToSpend, balanceAfterBills, balanceAfterPlans, committedBills, upcomingPayTotal, bills30Days, income30Days,
       pressureScore, pressureLabel,
       monthSpent:  Number(monthSpend[0].spent),
       monthIncome: Number(monthSpend[0].income),
-      upcomingBills, nextPaycheck,
+      upcomingBills, nextPaycheck, next3Bills,
       activePlans,
       plannedSpend,
       plannedSavings,
