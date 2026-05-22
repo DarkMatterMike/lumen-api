@@ -9,32 +9,35 @@ const C = {
   green:      '#5dcaa5',
   greenLight: '#edfaf4',
   greenDark:  '#1a6b52',
+  greenMid:   '#2a9e74',
   red:        '#e87363',
   redLight:   '#fff0ee',
   amber:      '#f0b04c',
-  bg:         '#f6f8fa',       // page background — light grey
-  surface:    '#ffffff',       // card surface
-  border:     '#e2e8f0',       // card border
-  borderLight:'#f1f5f9',       // inner dividers
-  ink:        '#0f172a',       // primary text
-  ink2:       '#475569',       // secondary text
-  ink3:       '#94a3b8',       // muted text
+  bg:         '#f6f8fa',
+  surface:    '#ffffff',
+  border:     '#e2e8f0',
+  borderLight:'#f1f5f9',
+  ink:        '#0f172a',
+  ink2:       '#475569',
+  ink3:       '#94a3b8',
   mono:       'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
   sans:       '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
 }
 
-// ── Email-safe inline styles ──────────────────────────────────
-// Using tables for layout because Outlook. All styles are inline.
-
 function base({ title, preheader = '', body, accentLine = true }) {
+  // ── FIX 1: Solid color instead of linear-gradient (Gmail strips gradients)
   const accent = accentLine
     ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:32px;">
-         <tr><td height="3" style="background:linear-gradient(90deg,${C.green} 0%,${C.greenDark} 100%);border-radius:2px;font-size:0;line-height:0;">&nbsp;</td></tr>
+         <tr>
+           <td width="40%" height="3" style="background-color:${C.green};font-size:0;line-height:0;">&nbsp;</td>
+           <td width="40%" height="3" style="background-color:${C.greenMid};font-size:0;line-height:0;">&nbsp;</td>
+           <td width="20%" height="3" style="background-color:${C.greenDark};font-size:0;line-height:0;">&nbsp;</td>
+         </tr>
        </table>`
     : ''
 
   return `<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -44,39 +47,64 @@ function base({ title, preheader = '', body, accentLine = true }) {
   <!--[if mso]>
   <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
   <![endif]-->
+  <style type="text/css">
+    /* ── Reset ── */
+    body, table, td, p, a, li { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+    body { margin: 0 !important; padding: 0 !important; }
+
+    /* ── Gmail Android font-size fix ── */
+    u + .email-body a { color: inherit !important; text-decoration: none !important;
+      font-size: inherit !important; font-weight: inherit !important; line-height: inherit !important; }
+
+    /* ── Apple Mail / iOS dark mode — force light ── */
+    @media (prefers-color-scheme: dark) {
+      .email-bg   { background-color: #f6f8fa !important; }
+      .email-card { background-color: #ffffff !important; border-color: #e2e8f0 !important; }
+      .email-text { color: #0f172a !important; }
+      .email-sub  { color: #475569 !important; }
+    }
+
+    /* ── Mobile responsive ── */
+    @media only screen and (max-width: 620px) {
+      .email-container { width: 100% !important; max-width: 100% !important; }
+      .email-padding   { padding: 24px 20px 28px !important; }
+    }
+  </style>
 </head>
-<body style="margin:0;padding:0;background-color:${C.bg};font-family:${C.sans};-webkit-font-smoothing:antialiased;">
+<body class="email-body" style="margin:0;padding:0;background-color:${C.bg};">
 
-<!-- Preheader (hidden) -->
-<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+<!-- Preheader (hidden preview text) -->
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
 
-<!-- Outer wrapper -->
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${C.bg};min-width:100%;">
+<!-- Wrapper -->
+<table class="email-bg" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${C.bg};">
   <tr>
     <td align="center" style="padding:40px 16px 60px;">
 
-      <!-- Inner container -->
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+      <!-- Max-width container -->
+      <table class="email-container" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;">
 
-        <!-- Logo header -->
+        <!-- Logo -->
         <tr>
           <td align="center" style="padding-bottom:28px;">
             <table cellpadding="0" cellspacing="0" border="0">
               <tr>
                 <td style="padding-right:8px;vertical-align:middle;">
-                  <!-- Orb SVG -->
-                  <svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
-                    <defs>
-                      <radialGradient id="orb" cx="35%" cy="32%" r="65%">
-                        <stop offset="0%" stop-color="#d4fff0"/>
-                        <stop offset="18%" stop-color="#7fffd4"/>
-                        <stop offset="48%" stop-color="${C.green}"/>
-                        <stop offset="78%" stop-color="#1a7a5e"/>
-                        <stop offset="100%" stop-color="#082e1e"/>
-                      </radialGradient>
-                    </defs>
-                    <circle cx="11" cy="11" r="10" fill="url(#orb)" filter="drop-shadow(0 0 4px rgba(93,202,165,.5))"/>
-                    <ellipse cx="8.5" cy="8" rx="2.8" ry="2" fill="rgba(255,255,255,.55)" transform="rotate(-20 8.5 8)"/>
+                  <!--
+                    FIX 2: Replace radialGradient orb (Gmail strips SVG <defs> entirely).
+                    Use layered solid circles to simulate depth — no defs, no filter needed.
+                  -->
+                  <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Base dark outer ring -->
+                    <circle cx="12" cy="12" r="11" fill="${C.greenDark}"/>
+                    <!-- Mid layer -->
+                    <circle cx="12" cy="12" r="9" fill="${C.greenMid}"/>
+                    <!-- Bright center -->
+                    <circle cx="12" cy="12" r="7" fill="${C.green}"/>
+                    <!-- Highlight specular — no rgba, use solid with opacity attribute -->
+                    <ellipse cx="9.5" cy="8.5" rx="3" ry="2" fill="white" opacity="0.45" transform="rotate(-15 9.5 8.5)"/>
                   </svg>
                 </td>
                 <td style="vertical-align:middle;">
@@ -87,13 +115,16 @@ function base({ title, preheader = '', body, accentLine = true }) {
           </td>
         </tr>
 
-        <!-- Card -->
+        <!-- Card
+             FIX 3: Remove box-shadow (Gmail strips it) and overflow:hidden (breaks border-radius).
+             Use border only — clean and consistent across all clients.
+        -->
         <tr>
-          <td style="background-color:${C.surface};border:1px solid ${C.border};border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04);">
+          <td class="email-card" style="background-color:${C.surface};border:1px solid ${C.border};border-radius:12px;">
             ${accent}
             <table width="100%" cellpadding="0" cellspacing="0" border="0">
               <tr>
-                <td style="padding:32px 36px 36px;">
+                <td class="email-padding" style="padding:32px 36px 36px;">
                   ${body}
                 </td>
               </tr>
@@ -123,7 +154,7 @@ function base({ title, preheader = '', body, accentLine = true }) {
 </html>`
 }
 
-// ── Reusable inner components ─────────────────────────────────
+// ── Inner components ──────────────────────────────────────────
 
 function heading(text) {
   return `<h1 style="margin:0 0 12px;font-family:${C.sans};font-size:24px;font-weight:600;color:${C.ink};line-height:1.3;letter-spacing:-0.3px;">${text}</h1>`
@@ -134,14 +165,29 @@ function para(text, style = '') {
 }
 
 function ctaButton(label, url, style = '') {
+  // FIX 4: VML button for Outlook + standard <a> for everyone else.
+  // The <a> uses line-height instead of padding so Gmail renders it reliably.
   return `
     <table cellpadding="0" cellspacing="0" border="0" style="margin-top:4px;margin-bottom:8px;${style}">
       <tr>
-        <td align="center" style="border-radius:10px;background-color:${C.green};">
+        <td align="center">
+          <!--[if mso]>
+          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="${url}"
+            style="height:44px;v-text-anchor:middle;width:220px;"
+            arcsize="22%" strokecolor="${C.greenDark}" fillcolor="${C.green}">
+            <w:anchorlock/>
+            <center style="color:#ffffff;font-family:sans-serif;font-size:14px;font-weight:bold;">${label}</center>
+          </v:roundrect>
+          <![endif]-->
+          <!--[if !mso]><!-->
           <a href="${url}" target="_blank"
-             style="display:inline-block;padding:13px 32px;font-family:${C.sans};font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;letter-spacing:0.1px;">
+             style="background-color:${C.green};border-radius:8px;color:#ffffff;display:inline-block;
+                    font-family:${C.sans};font-size:14px;font-weight:600;line-height:44px;
+                    text-align:center;text-decoration:none;width:220px;
+                    -webkit-text-size-adjust:none;mso-hide:all;">
             ${label}
           </a>
+          <!--<![endif]-->
         </td>
       </tr>
     </table>`
@@ -154,7 +200,6 @@ function divider() {
 }
 
 function statTable(rows) {
-  // rows: [{ label, value, color? }]
   const rowsHtml = rows.map(r => `
     <tr>
       <td style="padding:11px 0;font-family:${C.sans};font-size:13px;color:${C.ink2};border-bottom:1px solid ${C.borderLight};">${r.label}</td>
@@ -174,13 +219,10 @@ function note(text) {
   return `<p style="margin:16px 0 0;font-family:${C.sans};font-size:12px;color:${C.ink3};line-height:1.6;">${text}</p>`
 }
 
-// ── Send helper ───────────────────────────────────────────────
+// ── Send ──────────────────────────────────────────────────────
 async function send({ to, subject, html, text }) {
   try {
-    const result = await resend.emails.send({
-      from: FROM, to, subject, html,
-      text: text || subject,
-    })
+    const result = await resend.emails.send({ from: FROM, to, subject, html, text: text || subject })
     if (result.error) {
       console.error(`[Email] Resend error for "${subject}" to ${to}:`, JSON.stringify(result.error))
       return null
@@ -197,7 +239,6 @@ async function send({ to, subject, html, text }) {
 // TEMPLATES
 // ══════════════════════════════════════════════════════════════
 
-// 1. Welcome ───────────────────────────────────────────────────
 async function sendWelcome({ email, name }) {
   const firstName = (name || email).split(' ')[0].split('@')[0]
   const html = base({
@@ -205,7 +246,7 @@ async function sendWelcome({ email, name }) {
     preheader: 'Your financial picture starts now.',
     body: `
       ${heading(`Welcome, ${firstName}.`)}
-      ${para('Lumen is now tracking your financial picture. Here\'s how to get the most out of it:')}
+      ${para("Lumen is now tracking your financial picture. Here's how to get the most out of it:")}
       ${statTable([
         { label: '① Connect an account',       value: 'Bank sync or manual entry' },
         { label: '② Add your recurring items',  value: 'Bills, paycheck, subscriptions' },
@@ -220,7 +261,6 @@ async function sendWelcome({ email, name }) {
     text: `Welcome to Lumen, ${firstName}. Open your dashboard: ${FRONTEND}/dashboard` })
 }
 
-// 2. Family invite ─────────────────────────────────────────────
 async function sendFamilyInvite({ toEmail, toName, fromName, inviteCode }) {
   const inviteUrl = `${FRONTEND}/family/join/${inviteCode}`
   const html = base({
@@ -235,7 +275,7 @@ async function sendFamilyInvite({ toEmail, toName, fromName, inviteCode }) {
         { label: 'Private items',        value: 'Your choice', color: C.ink2 },
       ])}
       ${ctaButton('Accept Invite →', inviteUrl)}
-      ${note(`This link is unique to you and expires in 7 days. If you don't have a Lumen account yet, you can create one after clicking the link.`)}
+      ${note("This link is unique to you and expires in 7 days. If you don't have a Lumen account yet, you can create one after clicking the link.")}
     `
   })
   const toAddr = toName ? `${toName} <${toEmail}>` : toEmail
@@ -243,7 +283,6 @@ async function sendFamilyInvite({ toEmail, toName, fromName, inviteCode }) {
     text: `${fromName} invited you to their Lumen family plan. Accept here: ${inviteUrl}` })
 }
 
-// 3. Subscription confirmed ────────────────────────────────────
 async function sendSubscriptionConfirmed({ email, name, plan, periodEnd }) {
   const firstName = (name || email).split(' ')[0]
   const planLabel = plan === 'pro' ? 'Lumen Pro' : 'Lumen Plus'
@@ -274,7 +313,6 @@ async function sendSubscriptionConfirmed({ email, name, plan, periodEnd }) {
     text: `Your ${planLabel} subscription is active. Manage at ${FRONTEND}/settings` })
 }
 
-// 4. Subscription cancelled ────────────────────────────────────
 async function sendSubscriptionCancelled({ email, name, plan, periodEnd }) {
   const firstName = (name || email).split(' ')[0]
   const planLabel = plan === 'pro' ? 'Lumen Pro' : 'Lumen Plus'
@@ -289,9 +327,9 @@ async function sendSubscriptionCancelled({ email, name, plan, periodEnd }) {
       ${heading('Your plan has ended.')}
       ${para(`${firstName}, your <strong style="color:${C.ink};">${planLabel}</strong> subscription ended on ${endDate}. Your account is now on the free plan — your data is all still there.`)}
       ${statTable([
-        { label: 'Bank sync (Plaid)',          value: 'Paused',         color: C.red },
-        { label: 'Your transactions & budgets', value: 'Safe',           color: C.greenDark },
-        { label: 'Manual entry & CSV import',   value: 'Still available',color: C.greenDark },
+        { label: 'Bank sync (Plaid)',           value: 'Paused',          color: C.red },
+        { label: 'Your transactions & budgets',  value: 'Safe',            color: C.greenDark },
+        { label: 'Manual entry & CSV import',    value: 'Still available', color: C.greenDark },
       ])}
       ${ctaButton('Resubscribe →', `${FRONTEND}/pricing`)}
     `
@@ -300,7 +338,6 @@ async function sendSubscriptionCancelled({ email, name, plan, periodEnd }) {
     text: `Your ${planLabel} plan ended on ${endDate}. Your data is safe. Resubscribe at ${FRONTEND}/pricing` })
 }
 
-// 5. Payment failed ────────────────────────────────────────────
 async function sendPaymentFailed({ email, name, plan }) {
   const firstName = (name || email).split(' ')[0]
   const planLabel = plan === 'pro' ? 'Lumen Pro' : 'Lumen Plus'
@@ -319,7 +356,6 @@ async function sendPaymentFailed({ email, name, plan }) {
     text: `We couldn't process your ${planLabel} payment. Update at ${FRONTEND}/settings` })
 }
 
-// 6. Password changed ─────────────────────────────────────────
 async function sendPasswordChanged({ email, name }) {
   const firstName = (name || email).split(' ')[0]
   const now = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
@@ -329,7 +365,7 @@ async function sendPasswordChanged({ email, name }) {
     body: `
       ${heading('Password changed.')}
       ${para(`${firstName}, your Lumen password was changed on <strong style="color:${C.ink};">${now}</strong>.`)}
-      ${para('If you made this change — you\'re all set, no action needed.')}
+      ${para("If you made this change — you're all set, no action needed.")}
       ${para(`If you <strong style="color:${C.ink};">did not</strong> make this change, your account may be compromised. Secure it immediately.`)}
       ${ctaButton('Secure My Account →', `${FRONTEND}/settings`)}
     `
@@ -338,7 +374,6 @@ async function sendPasswordChanged({ email, name }) {
     text: `Your Lumen password was changed at ${now}. If this wasn't you, go to ${FRONTEND}/settings` })
 }
 
-// 7. Weekly digest ────────────────────────────────────────────
 async function sendWeeklyDigest({ email, name, stats }) {
   const firstName = (name || email).split(' ')[0]
   const { balance = 0, spent = 0, upcomingBills = [], nextPaycheck } = stats
@@ -352,7 +387,7 @@ async function sendWeeklyDigest({ email, name, stats }) {
     rows.push({ label: 'Next paycheck', value: `$${fmt(nextPaycheck.amount)} in ${nextPaycheck.daysUntil}d`, color: C.greenDark })
   }
   upcomingBills.slice(0, 4).forEach(b => {
-    rows.push({ label: b.name, value: `−$${fmt(b.amount)} in ${b.daysUntil}d`, color: C.red })
+    rows.push({ label: b.name, value: `-$${fmt(b.amount)} in ${b.daysUntil}d`, color: C.red })
   })
 
   const html = base({
