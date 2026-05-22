@@ -44,8 +44,18 @@ router.get('/', async (req, res, next) => {
 
     // Recurring items
     const { rows: recurringItems } = await pool.query(
-      `SELECT id, name, amount, day_of_month AS "recurringDay", type, icon, account_id AS "accountId"
-       FROM recurring WHERE user_id = $1 AND active = TRUE`,
+      `SELECT
+         id,
+         name,
+         -- Negate bills/subscriptions so frontend can use amount < 0 for expenses
+         CASE WHEN type = 'income' THEN amount ELSE -amount END AS amount,
+         day_of_month   AS "recurringDay",
+         'monthly'      AS "recurringFreq",
+         type,
+         icon,
+         account_id     AS "accountId"
+       FROM recurring
+       WHERE user_id = $1 AND active = TRUE`,
       [uid]
     )
 
