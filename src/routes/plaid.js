@@ -126,6 +126,26 @@ async function syncTransactions(userId, plaidItemId, accessToken, itemId, cursor
   let hasMore = true
   const newTxIds = []  // track IDs for Gmail enrichment
 
+  // ── Refresh account balances first ──────────────────────────
+  // accountsGet gives us the latest real-time balances. We do this
+  // on every sync so the dashboard never shows stale numbers.
+  try {
+    const accountsRes = await plaidClient.accountsGet({ access_token: accessToken })
+    for (const acct of accountsRes.data.accounts) {
+      const isDebt  = ['credit', 'loan'].includes(mapAccountType(acct.type, acct.subtype))
+      const balance = isDebt
+        ? acct.balances.current || 0
+        : acct.balances.available ?? acct.balances.current ?? 0
+      await pool.query(
+        `UPDATE accounts SET balance = $1, limit_amt = $2
+         WHERE plaid_account_id = $3 AND user_id = $4`,
+        [balance, acct.balances.limit || null, acct.account_id, userId]
+      )
+    }
+  } catch (balErr) {
+    console.warn('[Plaid] Balance refresh failed (non-fatal):', balErr.response?.data?.error_code || balErr.message)
+  }
+
   while (hasMore) {
     const response = await plaidClient.transactionsSync({
       access_token: accessToken,
