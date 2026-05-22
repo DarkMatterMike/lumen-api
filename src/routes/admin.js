@@ -56,8 +56,8 @@ router.delete('/users/:id', async (req, res, next) => {
     if (targetId === req.user.id) {
       return res.status(400).json({ error: 'Cannot revoke your own account' })
     }
-    // Hard-delete all refresh tokens so the user cannot get a new access token.
-    // Their current access token expires in ≤15 min on its own.
+    // Hard-delete refresh tokens so user cannot get new access tokens.
+    // Their current access token (≤15 min TTL) will expire on its own.
     await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [targetId])
     res.json({ ok: true })
   } catch (err) { next(err) }
