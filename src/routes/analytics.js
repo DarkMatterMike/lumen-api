@@ -56,9 +56,70 @@ router.get('/', async (req, res, next) => {
       ? Math.round(((avgIncome - avgSpend) / avgIncome) * 100)
       : 0
 
+    // ── Spending pace data (for SpendingPaceCard) ─────────────
+    // Current month totals
+    const { rows: paceCurrentRows } = await pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN amount<0 THEN ABS(amount) ELSE 0 END),0) AS spending,
+         COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0) AS income
+       FROM transactions
+       WHERE user_id=$1
+         AND date >= date_trunc('month', CURRENT_DATE)
+         AND COALESCE(tx_type,'expense') != 'transfer'`,
+      [uid]
+    )
+
+    // Last month total spend (reference line)
+    const { rows: paceLastRows } = await pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN amount<0 THEN ABS(amount) ELSE 0 END),0) AS spending
+       FROM transactions
+       WHERE user_id=$1
+         AND date >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+         AND date <  date_trunc('month', CURRENT_DATE)
+         AND COALESCE(tx_type,'expense') != 'transfer'`,
+      [uid]
+    )
+
+    // Daily cumulative spend for current month (for the chart line)
+    const { rows: paceDailyRows } = await pool.query(
+      `SELECT
+         EXTRACT(DAY FROM date)::int AS day,
+         SUM(ABS(amount)) OVER (ORDER BY EXTRACT(DAY FROM date)) AS cum_spend
+       FROM (
+         SELECT date, SUM(CASE WHEN amount<0 THEN ABS(amount) ELSE 0 END) AS amount
+         FROM transactions
+         WHERE user_id=$1
+           AND date >= date_trunc('month', CURRENT_DATE)
+           AND COALESCE(tx_type,'expense') != 'transfer'
+         GROUP BY date
+       ) daily
+       ORDER BY day`,
+      [uid]
+    )
+
+    const dailyCumulative = paceDailyRows.map(r => ({
+      day:      Number(r.day),
+      cumSpend: Math.round(Number(r.cum_spend) * 100) / 100,
+    }))
+
+    const monthlySummary = {
+      dailyCumulative,
+      totalSpend:    Number(paceCurrentRows[0]?.spending || 0),
+      totalIncome:   Number(paceCurrentRows[0]?.income   || 0),
+      lastMonthSpend: Number(paceLastRows[0]?.spending   || 0),
+    }
+
     res.json({
       cashFlow, byCategory,
-      kpis: { avgMonthlySpend: Math.round(avgSpend), savingsRate, savingsBalance },
+      kpis: {
+        avgMonthlySpend: Math.round(avgSpend),
+        savingsRate,
+        savingsBalance,
+        totalSpend:     monthlySummary.totalSpend,
+        totalIncome:    monthlySummary.totalIncome,
+        lastMonthSpend: monthlySummary.lastMonthSpend,
+      },
+      monthlySummary,
     })
   } catch (err) {
     next(err)
