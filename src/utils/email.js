@@ -162,17 +162,22 @@ function para(text, style = '') {
 }
 
 function ctaButton(label, url, style = '') {
-  // Universally safe button: table cell with background-color + <a> that fills it.
-  // No conditional comments — they cause Gmail to hide the fallback.
-  // Outlook uses the td background; Gmail/Apple use the <a> styling.
+  // Full-width button with border-bottom depth trick (works in Gmail).
+  // border-bottom on a <td> IS supported — it's border-bottom on inner <td>s that isn't.
+  // The darker bottom border simulates a pressed/3D effect without box-shadow.
   return `
-    <table cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;margin-bottom:16px;${style}">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:12px;margin-bottom:24px;${style}">
       <tr>
-        <td align="center" bgcolor="${C.green}" style="border-radius:8px;background-color:${C.green};">
+        <td align="center" bgcolor="${C.green}"
+            style="background-color:${C.green};border-radius:10px;
+                   border-bottom:3px solid ${C.greenDark};">
           <a href="${url}" target="_blank"
-             style="display:inline-block;padding:14px 36px;font-family:${C.sans};font-size:15px;
-                    font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;
-                    background-color:${C.green};letter-spacing:0.2px;white-space:nowrap;">
+             style="display:block;width:100%;padding:18px 32px;
+                    font-family:${C.sans};font-size:16px;font-weight:700;
+                    color:#ffffff;text-decoration:none;text-align:center;
+                    letter-spacing:0.3px;white-space:nowrap;
+                    background-color:${C.green};border-radius:10px;
+                    box-sizing:border-box;">
             ${label}
           </a>
         </td>
