@@ -80,9 +80,10 @@ router.get('/', async (req, res, next) => {
       const paychecksInWindow = allIncome.filter(r =>
         r._date > startDate && r._date < endDate
       )
-      // Bills due in [startDate, endDate)
+      // Bills due in [startDate, endDate] — INCLUSIVE of endDate.
+      // Bills on paycheck day still need to be covered before that money arrives.
       const billsInWindow = allExpenses.filter(r =>
-        r._date >= startDate && r._date < endDate
+        r._date >= startDate && r._date <= endDate
       )
 
       const paycheckOnStartTotal = paychecksOnStart.reduce((s, r) => s + Number(r.amount), 0)
