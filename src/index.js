@@ -22,6 +22,7 @@ const plansRoutes        = require('./routes/plans')
 const gmailRoutes        = require('./routes/gmail')
 const pendingRoutes      = require('./routes/pending')
 const notificationsRoutes = require('./routes/notifications')
+const { createNotification } = require('./routes/notifications')
 const goalsRoutes         = require('./routes/goals')
 const importRoutes        = require('./routes/import')
 const duplicatesRoutes    = require('./routes/duplicates')
@@ -174,6 +175,13 @@ setInterval(async () => {
         console.log(`[Cron] user ${user_id}: +${added} transactions, rules applied`)
         await syncGmailForUser(user_id).catch(e => console.warn('[Cron Gmail]', e.message))
         await runPhase5(user_id).catch(e => console.warn('[Cron P5]', e.message))
+        // Notify user of new transactions
+        await createNotification(user_id, {
+          type:  'insight',
+          title: `${added} new transaction${added > 1 ? 's' : ''} synced`,
+          body:  `${added} new transaction${added > 1 ? 's have' : ' has'} been imported from your bank.`,
+          icon:  '🔄',
+        }).catch(() => {})
       }
 
       // Phase C — budget intelligence (runs for ALL users every hour)

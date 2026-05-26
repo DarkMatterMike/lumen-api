@@ -30,9 +30,11 @@ router.get('/', async (req, res, next) => {
 
     // ── 1. Current month — all rows, no limit ──────────────────
     const { rows: currentRows } = await pool.query(
-      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
+      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon,
+              tv.visibility AS _visibility
        FROM transactions t
        LEFT JOIN accounts a ON t.account_id = a.id
+       LEFT JOIN transaction_visibility tv ON tv.transaction_id = t.id AND tv.set_by_user_id = t.user_id
        ${baseWhere}
          AND t.date >= date_trunc('month', CURRENT_DATE)
        ORDER BY t.date DESC, t.id DESC`,
@@ -43,9 +45,11 @@ router.get('/', async (req, res, next) => {
     const histOffset = page * pageSize
     const histParams = [...baseParams, pageSize, histOffset]
     const { rows: histRows } = await pool.query(
-      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
+      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon,
+              tv.visibility AS _visibility
        FROM transactions t
        LEFT JOIN accounts a ON t.account_id = a.id
+       LEFT JOIN transaction_visibility tv ON tv.transaction_id = t.id AND tv.set_by_user_id = t.user_id
        ${baseWhere}
          AND t.date < date_trunc('month', CURRENT_DATE)
        ORDER BY t.date DESC, t.id DESC
@@ -216,11 +220,13 @@ router.patch('/:id', async (req, res, next) => {
       ).catch(err => console.error('[Corrections] insert error:', err.message))
     }
 
-    // Re-fetch with account JOIN so the frontend gets account_name etc.
+    // Re-fetch with account JOIN + visibility so the frontend gets everything
     const { rows: full } = await pool.query(
-      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon
+      `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon,
+              tv.visibility AS _visibility
        FROM transactions t
        LEFT JOIN accounts a ON t.account_id = a.id
+       LEFT JOIN transaction_visibility tv ON tv.transaction_id = t.id AND tv.set_by_user_id = t.user_id
        WHERE t.id = $1`,
       [rows[0].id]
     )
