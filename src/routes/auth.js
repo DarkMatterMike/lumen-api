@@ -9,7 +9,11 @@ const { sendWelcome } = require('../utils/email')
 const requireAuth = require('../middleware/requireAuth')
 
 // ── Constants ─────────────────────────────────────────────────
-const ACCESS_TTL   = '15m'
+// 1 hour access token — mobile browsers suspend JS timers when backgrounded,
+// so a 15-min token expires before the proactive refresh fires.
+// The refresh cookie is the security boundary (7 days, httpOnly, SameSite:none).
+// A longer-lived access token just means fewer round trips to Railway.
+const ACCESS_TTL   = '1h'
 const REFRESH_7DAY = 7  * 24 * 60 * 60 * 1000   // 7 days remember me
 const REFRESH_1DAY = 1  * 24 * 60 * 60 * 1000   // 1 day  no remember me
 const MAX_FAILS    = 10
