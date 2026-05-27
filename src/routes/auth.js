@@ -9,39 +9,34 @@ const { sendWelcome } = require('../utils/email')
 const requireAuth = require('../middleware/requireAuth')
 
 // ── Constants ─────────────────────────────────────────────────
-// 1 hour access token — mobile browsers suspend JS timers when backgrounded,
-// so a 15-min token expires before the proactive refresh fires.
-// The refresh cookie is the security boundary (7 days, httpOnly, SameSite:none).
-// A longer-lived access token just means fewer round trips to Railway.
-const ACCESS_TTL   = '1h'
-const REFRESH_7DAY = 7  * 24 * 60 * 60 * 1000   // 7 days remember me
-const REFRESH_1DAY = 1  * 24 * 60 * 60 * 1000   // 1 day  no remember me
+// rememberMe=true  → 7-day refresh cookie + 7-day access token
+//   The access token matching the cookie TTL means overnight expiry
+//   is impossible — the token is alive for the full 7 days.
+// rememberMe=false → 1-day refresh cookie + 1-hour access token
+const ACCESS_TTL_SHORT  = '1h'
+const ACCESS_TTL_LONG   = '7d'
+const REFRESH_7DAY = 7  * 24 * 60 * 60 * 1000
+const REFRESH_1DAY = 1  * 24 * 60 * 60 * 1000
 const MAX_FAILS    = 10
 const LOCK_MIN     = 15
 
-// Google OAuth2 client for login (separate redirect URI from Gmail)
 function getLoginOAuth2Client() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_LOGIN_REDIRECT_URI  // e.g. https://your-api.railway.app/api/auth/google/callback
+    process.env.GOOGLE_LOGIN_REDIRECT_URI
   )
 }
 
-// ── Cookie config ─────────────────────────────────────────────
-// COOKIE_SECURE=true must be set in Railway env vars
-// On Railway, RAILWAY_ENVIRONMENT is always set. Use that as the production signal
-// rather than NODE_ENV which is often not configured explicitly.
 const IS_SECURE = process.env.COOKIE_SECURE === 'true'
   || process.env.NODE_ENV === 'production'
   || !!process.env.RAILWAY_ENVIRONMENT
 
-// ── Token helpers ─────────────────────────────────────────────
-function makeAccessToken(user) {
+function makeAccessToken(user, ttl) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role || 'user' },
     process.env.JWT_SECRET,
-    { expiresIn: ACCESS_TTL }
+    { expiresIn: ttl }
   )
 }
 
@@ -58,7 +53,7 @@ function setRefreshCookie(res, token, ttl) {
     httpOnly: true,
     secure:   IS_SECURE,
     sameSite: IS_SECURE ? 'none' : 'lax',
-    maxAge:   ttl,   // always explicit — never undefined
+    maxAge:   ttl,
     path:     '/',
   })
 }
@@ -71,12 +66,17 @@ function clearRefreshCookie(res) {
   })
 }
 
-async function issueSession(res, userId, email, name, ttl, ip, ua) {
-  // Fetch role so it's included in the access token
+// rememberMe controls both the cookie TTL and the access token TTL.
+// When rememberMe=true the access token lives 7 days — matching the cookie —
+// so there is no overnight expiry scenario possible.
+async function issueSession(res, userId, email, name, rememberMe, ip, ua) {
   const { rows: roleRows } = await pool.query(
     'SELECT role FROM users WHERE id = $1', [userId]
   )
   const role = roleRows[0]?.role || 'user'
+
+  const ttl     = rememberMe ? REFRESH_7DAY : REFRESH_1DAY
+  const accTTL  = rememberMe ? ACCESS_TTL_LONG : ACCESS_TTL_SHORT
 
   const refresh = makeRefreshToken()
   await pool.query(
@@ -85,10 +85,9 @@ async function issueSession(res, userId, email, name, ttl, ip, ua) {
     [userId, hashToken(refresh), new Date(Date.now() + ttl), ip, ua]
   )
   setRefreshCookie(res, refresh, ttl)
-  return makeAccessToken({ id: userId, email, role })
+  return makeAccessToken({ id: userId, email, role }, accTTL)
 }
 
-// ── Password validation ───────────────────────────────────────
 function validatePassword(pw) {
   if (!pw || pw.length < 10)     return 'Password must be at least 10 characters'
   if (!/[A-Z]/.test(pw))         return 'Password must contain an uppercase letter'
@@ -97,7 +96,6 @@ function validatePassword(pw) {
   return null
 }
 
-// ── Lockout helpers ───────────────────────────────────────────
 async function checkLockout(email) {
   const { rows } = await pool.query(
     'SELECT locked_until FROM users WHERE email=$1', [email.toLowerCase()]
@@ -141,7 +139,6 @@ async function recordSuccess(userId, email, ip) {
 // ROUTES
 // ══════════════════════════════════════════════════════════════
 
-// ── POST /api/auth/register ───────────────────────────────────
 router.post('/register', async (req, res, next) => {
   try {
     const { email, password, name, terms_agreed } = req.body
@@ -164,14 +161,13 @@ router.post('/register', async (req, res, next) => {
       [email.toLowerCase(), hash, name || null]
     )
     const user = rows[0]
-    const token = await issueSession(res, user.id, user.email, user.name, REFRESH_7DAY, req.ip, req.get('user-agent'))
-    // Fetch role to include in response
+    // New registrations always get 7-day remember-me
+    const token = await issueSession(res, user.id, user.email, user.name, true, req.ip, req.get('user-agent'))
     const { rows: roleCheck } = await pool.query('SELECT role FROM users WHERE id=$1', [user.id])
     res.status(201).json({ token, user: { ...user, role: roleCheck[0]?.role || 'user' } })
   } catch (err) { next(err) }
 })
 
-// ── POST /api/auth/login ──────────────────────────────────────
 router.post('/login', async (req, res, next) => {
   try {
     const { email, password, rememberMe = true } = req.body
@@ -186,7 +182,6 @@ router.post('/login', async (req, res, next) => {
     )
     const user = rows[0]
 
-    // Block password login for Google-only accounts
     if (user && user.oauth_provider === 'google' && !user.password_hash) {
       return res.status(400).json({ error: 'This account uses Google Sign-In. Please use the Google button.' })
     }
@@ -197,22 +192,17 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid email or password' })
     }
 
-    // Block locked accounts
     if (user.locked) {
       return res.status(403).json({ error: 'This account has been suspended.' })
     }
 
     await recordSuccess(user.id, email, req.ip)
 
-    // rememberMe=true → 7 days, false → 1 day (session)
-    const ttl = rememberMe ? REFRESH_7DAY : REFRESH_1DAY
-    const token = await issueSession(res, user.id, user.email, user.name, ttl, req.ip, req.get('user-agent'))
+    const token = await issueSession(res, user.id, user.email, user.name, rememberMe, req.ip, req.get('user-agent'))
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role || 'user' } })
   } catch (err) { next(err) }
 })
 
-// ── GET /api/auth/google/redirect ────────────────────────────
-// Redirects the browser to Google's OAuth consent page
 router.get('/google/redirect', (req, res) => {
   const oauth2 = getLoginOAuth2Client()
   const url = oauth2.generateAuthUrl({
@@ -226,32 +216,20 @@ router.get('/google/redirect', (req, res) => {
   res.redirect(url)
 })
 
-// ── GET /api/auth/google/callback ─────────────────────────────
 router.get('/google/callback', async (req, res, next) => {
   const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:5173'
   try {
     const { code, error } = req.query
-
-    console.log('[Google callback] code present:', !!code, 'error:', error)
-    console.log('[Google callback] GOOGLE_LOGIN_REDIRECT_URI:', process.env.GOOGLE_LOGIN_REDIRECT_URI)
-    console.log('[Google callback] GOOGLE_CLIENT_ID set:', !!process.env.GOOGLE_CLIENT_ID)
-    console.log('[Google callback] GOOGLE_CLIENT_SECRET set:', !!process.env.GOOGLE_CLIENT_SECRET)
-
     if (error || !code) {
-      console.error('[Google callback] No code or error param:', error)
       return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent(error || 'Google sign-in was cancelled')}`)
     }
 
     const oauth2 = getLoginOAuth2Client()
-    console.log('[Google callback] Exchanging code for tokens...')
-
     let tokens
     try {
       const result = await oauth2.getToken(code)
       tokens = result.tokens
-      console.log('[Google callback] Tokens received, id_token present:', !!tokens.id_token)
     } catch (tokenErr) {
-      console.error('[Google callback] Token exchange failed:', tokenErr.message)
       return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Failed to exchange Google code: ' + tokenErr.message)}`)
     }
 
@@ -262,29 +240,22 @@ router.get('/google/callback', async (req, res, next) => {
       const userInfoApi = google.oauth2({ version: 'v2', auth: oauth2 })
       const response = await userInfoApi.userinfo.get()
       data = response.data
-      console.log('[Google callback] User info received, email:', data.email)
     } catch (profileErr) {
-      console.error('[Google callback] Profile fetch failed:', profileErr.message)
       return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Failed to get Google profile')}`)
     }
 
     const { id: googleId, email, name, picture } = data
-
     if (!email) {
-      console.error('[Google callback] No email in Google profile')
       return res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Google account has no email address')}`)
     }
 
-    // Find or create user
     let { rows } = await pool.query(
       'SELECT id, email, name, google_id FROM users WHERE google_id=$1 OR email=$2 LIMIT 1',
       [googleId, email.toLowerCase()]
     )
     let user = rows[0]
-    console.log('[Google callback] Existing user found:', !!user)
 
     if (!user) {
-      // Check if terms/privacy columns exist before inserting
       const { rows: newRows } = await pool.query(
         `INSERT INTO users (email, name, google_id, google_email, google_name, google_avatar, oauth_provider)
          VALUES ($1,$2,$3,$4,$5,$6,'google')
@@ -292,32 +263,26 @@ router.get('/google/callback', async (req, res, next) => {
         [email.toLowerCase(), name || email.split('@')[0], googleId, email.toLowerCase(), name, picture]
       )
       user = newRows[0]
-      console.log('[Google callback] New user created:', user.id)
-      // Welcome email for new Google signups
       sendWelcome({ email: user.email, name: user.name }).catch(() => {})
     } else if (!user.google_id) {
       await pool.query(
         `UPDATE users SET google_id=$1, google_email=$2, google_name=$3, google_avatar=$4 WHERE id=$5`,
         [googleId, email.toLowerCase(), name, picture, user.id]
       )
-      console.log('[Google callback] Linked Google to existing user:', user.id)
     }
 
-    const accessToken = await issueSession(res, user.id, user.email, user.name, REFRESH_7DAY, req.ip, req.get('user-agent'))
-    console.log('[Google callback] Session issued, redirecting to frontend')
-
+    // Google logins always get 7-day remember-me
+    const accessToken = await issueSession(res, user.id, user.email, user.name, true, req.ip, req.get('user-agent'))
     res.redirect(`${FRONTEND}/?google_token=${encodeURIComponent(accessToken)}`)
   } catch (err) {
-    console.error('[Google callback] Unhandled error:', err.message, err.stack)
     res.redirect(`${FRONTEND}/?auth_error=${encodeURIComponent('Sign-in failed: ' + err.message)}`)
   }
 })
 
-// ── POST /api/auth/refresh ────────────────────────────────────
-// NO ROTATION — validate the refresh token and issue a new access token.
-// Rotation was the root cause of random logouts: any race condition between
-// concurrent tabs or network retries would invalidate the current cookie.
-// The refresh token stays stable for its full 7-day life.
+// POST /api/auth/refresh
+// Validates the httpOnly refresh cookie and issues a new access token.
+// The access token TTL matches the remaining life of the refresh cookie
+// so a remembered user never gets logged out mid-session.
 router.post('/refresh', async (req, res, next) => {
   try {
     const token = req.cookies?.lumen_refresh
@@ -339,7 +304,6 @@ router.post('/refresh', async (req, res, next) => {
       return res.status(401).json({ error: 'Session expired. Please log in again.' })
     }
 
-    // Account locked by admin
     if (rows[0].locked) {
       clearRefreshCookie(res)
       return res.status(401).json({ error: 'Account has been suspended.' })
@@ -348,12 +312,16 @@ router.post('/refresh', async (req, res, next) => {
     const row  = rows[0]
     const user = { id: row.user_id, email: row.email, name: row.name, role: row.role || 'user' }
 
-    // Just issue a fresh 15-min access token. Cookie stays the same.
-    res.json({ token: makeAccessToken(user), user })
+    // Issue access token whose TTL matches how much time is left on the refresh cookie.
+    // This prevents the "token expired but cookie still valid" overnight logout scenario.
+    const msLeft = new Date(row.expires_at) - Date.now()
+    const secsLeft = Math.floor(msLeft / 1000)
+    const accTTL = secsLeft > 0 ? `${secsLeft}s` : ACCESS_TTL_SHORT
+
+    res.json({ token: makeAccessToken(user, accTTL), user })
   } catch (err) { next(err) }
 })
 
-// ── POST /api/auth/logout ─────────────────────────────────────
 router.post('/logout', async (req, res, next) => {
   try {
     const token = req.cookies?.lumen_refresh
@@ -368,7 +336,6 @@ router.post('/logout', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// ── POST /api/auth/logout-all ─────────────────────────────────
 router.post('/logout-all', requireAuth, async (req, res, next) => {
   try {
     await pool.query(
@@ -379,7 +346,6 @@ router.post('/logout-all', requireAuth, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// ── GET /api/auth/sessions ────────────────────────────────────
 router.get('/sessions', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
@@ -393,7 +359,6 @@ router.get('/sessions', requireAuth, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// ── PATCH /api/auth/me/onboarding ────────────────────────────
 router.patch('/me/onboarding', requireAuth, async (req, res, next) => {
   try {
     await pool.query(
@@ -404,7 +369,6 @@ router.patch('/me/onboarding', requireAuth, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// ── GET /api/auth/me ──────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
