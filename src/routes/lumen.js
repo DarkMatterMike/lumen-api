@@ -140,13 +140,13 @@ async function buildFinancialContext(userId) {
 === LUMEN FINANCIAL SNAPSHOT — ${today.toDateString()} ===
 
 CURRENT POSITION
-- Total liquid balance (toggled accounts): $${balance.toLocaleString()}
+- Raw liquid balance (sum of toggled accounts): $${balance.toLocaleString()}
   (${liquidAccounts.map(a => a.name + (a.mask ? ' ····' + a.mask : '') + ': $' + Number(a.balance).toLocaleString()).join(' | ')})
-- After committed bills: $${(balance - committedBills).toLocaleString()}
 - Committed bills remaining this cycle: $${committedBills.toLocaleString()}
-- Upcoming income this cycle: +$${upcomingIncomeTotal.toLocaleString()} (${upcomingIncome.map(r => r.name + " $" + Number(r.amount).toLocaleString() + " on day " + r.day_of_month).join(", ") || "none"})
-- True free-to-spend (after bills + income): $${(balance - committedBills + upcomingIncomeTotal).toLocaleString()}
-- After pinned plans too: $${balAfterPlansAndIncome.toLocaleString()}
+- Upcoming income this cycle: +$${upcomingIncomeTotal.toLocaleString()} (${upcomingIncome.map(r => r.name + ' $' + Number(r.amount).toLocaleString() + ' on day ' + r.day_of_month).join(', ') || 'none'})
+- *** FREE TO SPEND — THIS IS THE HERO NUMBER SHOWN ON DASHBOARD. USE THIS FOR ALL WHAT-IF ARITHMETIC: $${(balance - committedBills + upcomingIncomeTotal).toLocaleString()} ***
+  Formula: raw balance minus committed bills plus upcoming income. When user asks "what if I spend $X", subtract X from THIS number.
+- After pinned plans: $${balAfterPlansAndIncome.toLocaleString()}
 - Pressure gauge: ${pressureLabel} (score: ${pressureScore}/100)
 - Net worth across all accounts: $${netWorth.toLocaleString()}
 
