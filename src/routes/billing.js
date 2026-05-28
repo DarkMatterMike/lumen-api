@@ -87,7 +87,8 @@ router.post('/portal', requireAuth, async (req, res, next) => {
       [req.user.id]
     )
     if (!rows[0]?.stripe_customer_id) {
-      return res.status(404).json({ error: 'No billing account found' })
+      return res.status(400).json({ error: 'No Stripe billing account linked to this user' }
+      )
     }
     const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:5173'
     const portal = await stripe.billingPortal.sessions.create({
