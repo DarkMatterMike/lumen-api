@@ -212,7 +212,7 @@ ${activePlans.length > 0 ? activePlans.map(p => {
 // POST /api/lumen/ask — streaming AI response
 router.post('/ask', async (req, res, next) => {
   try {
-    const { message, context_type = 'general' } = req.body
+    const { message, context_type = 'general', history = [] } = req.body
     if (!message) return res.status(400).json({ error: 'Message is required' })
 
     // Get user's Anthropic key
@@ -276,7 +276,14 @@ Always speak as Lumen. First person. Reference their specific numbers. Never sta
       model:      'claude-sonnet-4-5',
       max_tokens: 1024,
       system:     systemPrompt,
-      messages:   [{ role: 'user', content: message }],
+      // Build full conversation: prior chat turns + current message
+      messages: [
+        ...history
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => ({ role: m.role, content: String(m.content || '') }))
+          .slice(-20), // cap at last 20 turns to stay within token limits
+        { role: 'user', content: message },
+      ],
     })
 
     stream.on('text', (text) => {
