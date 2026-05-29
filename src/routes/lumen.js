@@ -227,8 +227,15 @@ router.post('/ask', async (req, res, next) => {
       })
     }
 
-    // Build financial context
-    const financialContext = await buildFinancialContext(req.user.id)
+    // Build financial context — do this BEFORE opening the SSE stream
+    // so any DB errors can still return a proper JSON error response
+    let financialContext
+    try {
+      financialContext = await buildFinancialContext(req.user.id)
+    } catch (ctxErr) {
+      console.error('buildFinancialContext failed:', ctxErr)
+      financialContext = '(Financial data temporarily unavailable — answer based on what the user provided in their message.)'
+    }
 
     const systemPrompt = `You are Lumen — a financial AI with a real personality. You're the friend who happens to know everything about money: sharp, honest, occasionally funny, never boring. You say what others won't. You celebrate wins like they matter. You flag problems before they become disasters.
 
@@ -282,13 +289,28 @@ Always speak as Lumen. First person. Reference their specific numbers. Never sta
     })
 
     stream.on('error', (err) => {
-      console.error('Anthropic stream error:', err)
-      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`)
+      console.error('Anthropic stream error:', err.message, err.status, err.error)
+      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message || 'AI stream failed' })}\n\n`)
       res.end()
     })
 
+    // Catch unhandled promise rejections from the stream
+    stream.finalMessage().catch((err) => {
+      console.error('Anthropic finalMessage error:', err.message, err.status)
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: err.message || 'AI response failed' })}\n\n`)
+        res.end()
+      }
+    })
+
   } catch (err) {
-    next(err)
+    console.error('/ask route error:', err.message)
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message })
+    } else if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`)
+      res.end()
+    }
   }
 })
 
