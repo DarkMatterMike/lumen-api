@@ -618,14 +618,15 @@ Examples:
       summary = `Total spending last ${params.days} days: $${Number(r[0]?.total || 0).toFixed(2)} across ${r[0]?.count || 0} transactions.`
     }
 
-    // Second pass: AI formats a clean natural language answer
-    const financialContext = `Query: "${message}"\nData: ${summary}\nRows: ${JSON.stringify(rows.slice(0, 15))}`
+    // Second pass: AI formats a clean natural language answer — with full financial context
+    const financialContext = await buildFinancialContext(uid)
+    const queryResultContext = `Query: "${message}"\nSQL Result: ${summary}\nRows: ${JSON.stringify(rows.slice(0, 15))}`
     const answerRes = await client.messages.create({
       model: 'claude-haiku-4-5',
-      max_tokens: 150,
+      max_tokens: 250,
       messages: [{
         role: 'user',
-        content: `You are Lumen, a personal finance AI. Answer this user query in 1-2 sentences using the real data below. Be specific with numbers. Don't start with "I".\n\n${financialContext}`
+        content: `You are Lumen, a personal finance AI. Answer the user's question using their real financial data AND the SQL query results below. Be specific with numbers. Don't start with "I". Keep it to 2-3 sentences unless the question is complex.\n\nUSER QUESTION: "${message}"\n\nSQL RESULT:\n${queryResultContext}\n\nFULL FINANCIAL CONTEXT:\n${financialContext}`
       }]
     })
 
