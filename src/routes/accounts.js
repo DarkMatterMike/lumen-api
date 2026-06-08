@@ -31,7 +31,7 @@ router.get('/', async (req, res, next) => {
 // PATCH /api/accounts/:id — update include_in_balance (and other fields as needed)
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { include_in_balance, is_debt } = req.body
+    const { include_in_balance, is_debt, forecast_role } = req.body
     const updates = []
     const values  = []
     let idx = 1
@@ -39,6 +39,13 @@ router.patch('/:id', async (req, res, next) => {
     if (include_in_balance !== undefined) {
       updates.push(`include_in_balance=$${idx++}`)
       values.push(include_in_balance)
+    }
+
+    if (forecast_role !== undefined) {
+      const allowed = ['source', 'protected', 'ignore']
+      if (!allowed.includes(forecast_role)) return res.status(400).json({ error: 'invalid forecast_role' })
+      updates.push(`forecast_role=$${idx++}`)
+      values.push(forecast_role)
     }
 
     if (is_debt !== undefined) {

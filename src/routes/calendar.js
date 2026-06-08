@@ -76,6 +76,20 @@ router.get('/', async (req, res, next) => {
   }
 })
 
+// GET /api/calendar/forecast — per-account cash-flow projection + transfer recommendations
+router.get('/forecast', async (req, res, next) => {
+  try {
+    const { buildAccountForecast } = require('../utils/accountForecast')
+    const settleDays  = req.query.settleDays  !== undefined ? Number(req.query.settleDays)  : undefined
+    const bufferFloor = req.query.bufferFloor !== undefined ? Number(req.query.bufferFloor) : undefined
+    const data = await buildAccountForecast(req.user.id, { settleDays, bufferFloor })
+    res.json(data)
+  } catch (err) {
+    console.error('[/api/calendar/forecast] error:', err && err.message, err && err.stack)
+    next(err)
+  }
+})
+
 module.exports = router
 
 // POST /api/calendar — add a recurring item
