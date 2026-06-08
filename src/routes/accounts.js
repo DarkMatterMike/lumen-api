@@ -31,7 +31,8 @@ router.get('/', async (req, res, next) => {
 // PATCH /api/accounts/:id — update include_in_balance (and other fields as needed)
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { include_in_balance, is_debt, forecast_role } = req.body
+    const { include_in_balance, is_debt, forecast_role,
+            interest_rate, limit_amt, balance, minimum_payment } = req.body
     const updates = []
     const values  = []
     let idx = 1
@@ -51,6 +52,35 @@ router.patch('/:id', async (req, res, next) => {
     if (is_debt !== undefined) {
       updates.push(`is_debt=$${idx++}`)
       values.push(Boolean(is_debt))
+    }
+
+    // ── Editable financial fields (manual entry / corrections) ──
+    if (interest_rate !== undefined) {
+      const r = Number(interest_rate)
+      if (!Number.isFinite(r) || r < 0 || r > 100) return res.status(400).json({ error: 'interest_rate must be 0-100' })
+      updates.push(`interest_rate=$${idx++}`)
+      values.push(r)
+    }
+
+    if (limit_amt !== undefined) {
+      const l = Number(limit_amt)
+      if (!Number.isFinite(l) || l < 0) return res.status(400).json({ error: 'limit_amt must be ≥ 0' })
+      updates.push(`limit_amt=$${idx++}`)
+      values.push(l)
+    }
+
+    if (balance !== undefined) {
+      const b = Number(balance)
+      if (!Number.isFinite(b)) return res.status(400).json({ error: 'balance must be a number' })
+      updates.push(`balance=$${idx++}`)
+      values.push(b)
+    }
+
+    if (minimum_payment !== undefined) {
+      const m = Number(minimum_payment)
+      if (!Number.isFinite(m) || m < 0) return res.status(400).json({ error: 'minimum_payment must be ≥ 0' })
+      updates.push(`minimum_payment=$${idx++}`)
+      values.push(m)
     }
 
     if (!updates.length) return res.status(400).json({ error: 'Nothing to update' })
