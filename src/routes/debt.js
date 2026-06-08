@@ -101,4 +101,22 @@ router.patch('/:id/minimum-payment', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// PATCH /api/debt/:id/statement-close-day — save statement closing day for paydown timing
+router.patch('/:id/statement-close-day', async (req, res, next) => {
+  try {
+    const { statement_close_day } = req.body
+    const day = Number(statement_close_day)
+    if (!Number.isInteger(day) || day < 1 || day > 31) {
+      return res.status(400).json({ error: 'statement_close_day must be an integer 1-31' })
+    }
+
+    const { rows } = await pool.query(
+      'UPDATE accounts SET statement_close_day=$1 WHERE id=$2 AND user_id=$3 AND is_debt=TRUE RETURNING *',
+      [day, req.params.id, req.user.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Debt account not found' })
+    res.json(rows[0])
+  } catch (err) { next(err) }
+})
+
 module.exports = router

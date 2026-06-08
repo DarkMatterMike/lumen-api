@@ -248,7 +248,7 @@ async function detectPayoffOpportunities(userId) {
 // ── Get full debt summary for a user ─────────────────────────────────────────
 async function getDebtSummary(userId) {
   const { rows: accounts } = await pool.query(
-    `SELECT id, name, type, balance, interest_rate, minimum_payment, limit_amt, icon, color
+    `SELECT id, name, type, balance, interest_rate, minimum_payment, limit_amt, icon, color, statement_close_day
      FROM accounts WHERE user_id=$1 AND is_debt=TRUE AND balance > 0
      ORDER BY interest_rate DESC NULLS LAST`,
     [userId]
@@ -262,6 +262,7 @@ async function getDebtSummary(userId) {
     rate:       Number(a.interest_rate || 0),
     minPayment: Number(a.minimum_payment || Math.max(25, Number(a.balance) * 0.02)),
     limit:      Number(a.limit_amt || 0),
+    statementCloseDay: a.statement_close_day != null ? Number(a.statement_close_day) : null,
     icon:       a.icon,
     color:      a.color,
   }))
