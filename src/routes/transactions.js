@@ -10,15 +10,16 @@ const {
 router.use(requireAuth)
 
 // GET /api/transactions
-// Always returns the full current month. Historical transactions are paginated at 50/page.
-// Query params: page (default 0), category
+// currentMonth = rolling window (default 60 days, configurable via ?days=N).
+// Historical = everything older than that window, paginated at 100/page.
+// Query params: page (default 0), days (default 60), category
 router.get('/', async (req, res, next) => {
   try {
     const page     = Math.max(0, parseInt(req.query.page) || 0)
-    const pageSize = 50
+    const pageSize = 100
+    const days     = Math.max(1, Math.min(365, parseInt(req.query.days) || 60))
     const category = req.query.category
 
-    // Build optional category clause
     const baseParams = [req.user.id]
     let catClause = ''
     if (category && category !== 'All') {
@@ -28,7 +29,7 @@ router.get('/', async (req, res, next) => {
 
     const baseWhere = `WHERE t.user_id = $1 AND COALESCE(t.tx_type,'expense') != 'transfer'${catClause}`
 
-    // ── 1. Current month — all rows, no limit ──────────────────
+    // ── 1. Rolling window — all rows, no limit ─────────────────
     const { rows: currentRows } = await pool.query(
       `SELECT t.*, a.name AS account_name, a.mask AS account_mask, a.institution AS account_institution, a.icon AS account_icon,
               tv.visibility AS _visibility
@@ -36,7 +37,7 @@ router.get('/', async (req, res, next) => {
        LEFT JOIN accounts a ON t.account_id = a.id
        LEFT JOIN transaction_visibility tv ON tv.transaction_id = t.id AND tv.set_by_user_id = t.user_id
        ${baseWhere}
-         AND t.date >= date_trunc('month', CURRENT_DATE)
+         AND t.date >= (CURRENT_DATE - INTERVAL '${days} days')
        ORDER BY t.date DESC, t.id DESC`,
       baseParams
     )
@@ -51,7 +52,7 @@ router.get('/', async (req, res, next) => {
        LEFT JOIN accounts a ON t.account_id = a.id
        LEFT JOIN transaction_visibility tv ON tv.transaction_id = t.id AND tv.set_by_user_id = t.user_id
        ${baseWhere}
-         AND t.date < date_trunc('month', CURRENT_DATE)
+         AND t.date < (CURRENT_DATE - INTERVAL '${days} days')
        ORDER BY t.date DESC, t.id DESC
        LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}`,
       histParams
@@ -61,13 +62,13 @@ router.get('/', async (req, res, next) => {
     const { rows: countRows } = await pool.query(
       `SELECT COUNT(*) FROM transactions t
        ${baseWhere}
-         AND t.date < date_trunc('month', CURRENT_DATE)`,
+         AND t.date < (CURRENT_DATE - INTERVAL '${days} days')`,
       baseParams
     )
     const totalHistorical = parseInt(countRows[0].count)
     const hasMore = (page + 1) * pageSize < totalHistorical
 
-    // ── 4. Monthly totals (current month, all rows) ────────────
+    // ── 4. Monthly totals (current calendar month, always) ─────
     const { rows: totals } = await pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN tx_type = 'income'  OR (tx_type IS NULL AND amount > 0) THEN ABS(amount) ELSE 0 END), 0) AS income,
@@ -107,7 +108,6 @@ router.get('/', async (req, res, next) => {
       [req.user.id]
     )
 
-    // Build cumulative daily array for the chart
     const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
     const dayMap = {}
     for (const r of dailyRows) dayMap[r.day] = Number(r.day_spend)
@@ -121,18 +121,17 @@ router.get('/', async (req, res, next) => {
     }
 
     res.json({
-      currentMonth:    currentRows,
-      historical:      histRows,
-      totals:          totals[0],
-      pagination:      { page, pageSize, total: totalHistorical, hasMore },
+      currentMonth:   currentRows,
+      historical:     histRows,
+      totals:         totals[0],
+      pagination:     { page, pageSize, days, total: totalHistorical, hasMore },
       dailyCumulative,
-      lastMonthSpend:  Number(lastMonthRows[0]?.spending || 0),
+      lastMonthSpend: Number(lastMonthRows[0]?.spending || 0),
     })
   } catch (err) {
     next(err)
   }
 })
-
 // POST /api/transactions
 router.post('/', async (req, res, next) => {
   try {
