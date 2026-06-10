@@ -27,7 +27,7 @@ router.get('/', async (req, res, next) => {
       catClause = ` AND t.category = $${baseParams.length}`
     }
 
-    const baseWhere = `WHERE t.user_id = $1 AND COALESCE(t.tx_type,'expense') != 'transfer'${catClause}`
+    const baseWhere = `WHERE t.user_id = $1${catClause}`
 
     // ── 1. Rolling window — all rows, no limit ─────────────────
     const { rows: currentRows } = await pool.query(
