@@ -136,7 +136,7 @@ router.get('/', async (req, res, next) => {
         // These are true monthly equivalents — biweekly items counted ×2.167
         monthly_income:   monthlyIncome,
         monthly_bills:    monthlyBills,
-        net_monthly:      monthlyIncome - monthlyBills - totalBudgeted,
+        net_monthly:      monthlyIncome - monthlyBills,  // income minus fixed bills only; discretionary budgets are allocations within this remainder
         total_debt:       totalDebt,
         total_minimums:   totalMinimums,
         liquid_balance:   liquidBalance,
@@ -169,7 +169,7 @@ router.get('/', async (req, res, next) => {
         monthly_income:        monthlyIncome,
         monthly_fixed_bills:   monthlyBills,
         monthly_discretionary: totalBudgeted,
-        net_monthly:           monthlyIncome - monthlyBills - totalBudgeted,
+        net_monthly:           monthlyIncome - monthlyBills,  // income minus fixed bills only
       },
     }
 
