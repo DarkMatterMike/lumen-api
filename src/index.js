@@ -39,6 +39,7 @@ const daniRoutes          = require('./routes/dani')
 const adminRoutes         = require('./routes/admin')
 const billingRoutes       = require('./routes/billing')
 const familyRoutes        = require('./routes/family')
+const snapshotRoutes      = require('./routes/snapshot')
 
 const { syncTransactionsForUser } = require('./routes/plaid')
 const { applyRulesToUser }        = require('./routes/rules')
@@ -145,6 +146,7 @@ app.use('/api/dani',         daniRoutes)
 app.use('/api/billing',      billingRoutes)
 app.use('/api/family',       familyRoutes)
 app.use('/api/admin',        adminRoutes)
+app.use('/api/snapshot',     snapshotRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` })

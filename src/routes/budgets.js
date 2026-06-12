@@ -106,110 +106,128 @@ router.delete('/:id', async (req, res, next) => {
   }
 })
 
-module.exports = router
 
-// GET /api/budgets/:id/transactions — transactions for a specific budget category
-router.get('/:id/transactions', async (req, res, next) => {
+// ── POST /api/budgets/auto-optimize ─────────────────────────────────────────
+// Analyzes the last 3 months of spend per budget and calls Claude to suggest
+// new monthly caps. Returns suggestions the frontend previews before applying.
+
+const Anthropic = require('@anthropic-ai/sdk')
+const _anthropic = new Anthropic()
+
+router.post('/auto-optimize', async (req, res, next) => {
   try {
     const uid = req.user.id
-    const { rows: budget } = await pool.query(
-      'SELECT * FROM budgets WHERE id=$1 AND user_id=$2',
-      [req.params.id, uid]
-    )
-    if (!budget.length) return res.status(404).json({ error: 'Budget not found' })
 
-    const { rows: transactions } = await pool.query(
-      `SELECT * FROM transactions
-       WHERE user_id=$1 AND category ILIKE $2 AND amount<0 AND COALESCE(tx_type,'expense') != 'transfer'
-         AND date>=date_trunc('month',CURRENT_DATE)
-       ORDER BY date DESC, id DESC`,
-      [uid, budget[0].name]
+    // 1. Fetch all budgets
+    const { rows: budgets } = await pool.query(
+      'SELECT id, name, cap, icon, completed FROM budgets WHERE user_id = $1',
+      [uid]
     )
-    res.json({ transactions })
-  } catch (err) {
-    next(err)
-  }
-})
-
-// GET /api/budgets/:id/history — 6-month spend history for sparkline/chart
-router.get('/:id/history', async (req, res, next) => {
-  try {
-    const uid = req.user.id
-    const { rows: budget } = await pool.query(
-      'SELECT * FROM budgets WHERE id=$1 AND user_id=$2',
-      [req.params.id, uid]
-    )
-    if (!budget.length) return res.status(404).json({ error: 'Budget not found' })
-
-    const { rows: history } = await pool.query(
-      `SELECT
-         to_char(date_trunc('month', date), 'Mon') AS month,
-         date_trunc('month', date) AS month_start,
-         ABS(SUM(amount)) AS spent
-       FROM transactions
-       WHERE user_id=$1
-         AND category ILIKE $2
-         AND amount < 0
-         AND COALESCE(tx_type,'expense') != 'transfer'
-         AND date >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months'
-       GROUP BY date_trunc('month', date)
-       ORDER BY month_start ASC`,
-      [uid, budget[0].name]
-    )
-
-    // Fill in missing months with 0
-    const months = []
-    for (let i = 5; i >= 0; i--) {
-      const d     = new Date()
-      d.setMonth(d.getMonth() - i)
-      const key   = d.toLocaleString('en-US', { month: 'short' })
-      const found = history.find(h => h.month === key)
-      months.push({ month: key, spent: found ? Number(found.spent) : 0 })
+    if (!budgets.length) {
+      return res.json({ suggestions: [], summary: 'No budgets found to optimize.' })
     }
 
-    res.json({ history: months, cap: Number(budget[0].cap) })
-  } catch (err) { next(err) }
-})
-
-// PATCH /api/budgets/:id/complete — toggle completed status
-router.patch('/:id/complete', async (req, res, next) => {
-  try {
-    const { completed } = req.body
-    const { rows } = await pool.query(
-      'UPDATE budgets SET completed=$1 WHERE id=$2 AND user_id=$3 RETURNING *',
-      [completed, req.params.id, req.user.id]
+    // 2. Build 3-month spend history per budget
+    const historyByBudget = await Promise.all(
+      budgets.map(async (b) => {
+        const { rows } = await pool.query(
+          `SELECT
+             to_char(date_trunc('month', date), 'Mon YYYY') AS month,
+             date_trunc('month', date) AS month_start,
+             ROUND(ABS(SUM(amount))::numeric, 2) AS spent
+           FROM transactions
+           WHERE user_id = $1
+             AND category ILIKE $2
+             AND amount < 0
+             AND COALESCE(tx_type, 'expense') != 'transfer'
+             AND date >= date_trunc('month', CURRENT_DATE) - INTERVAL '3 months'
+             AND date <  date_trunc('month', CURRENT_DATE)
+           GROUP BY date_trunc('month', date)
+           ORDER BY month_start ASC`,
+          [uid, b.name]
+        )
+        // Fill missing months with 0
+        const months = []
+        for (let i = 3; i >= 1; i--) {
+          const d = new Date()
+          d.setDate(1)
+          d.setMonth(d.getMonth() - i)
+          const label = d.toLocaleString('en-US', { month: 'short', year: 'numeric' })
+          const found = rows.find(r => r.month === label)
+          months.push({ month: label, spent: found ? Number(found.spent) : 0 })
+        }
+        const avg = months.reduce((s, m) => s + m.spent, 0) / 3
+        return {
+          id:                b.id,
+          name:              b.name,
+          icon:              b.icon,
+          current_cap:       Number(b.cap),
+          completed:         b.completed,
+          months,
+          avg_monthly_spend: Math.round(avg * 100) / 100,
+        }
+      })
     )
-    if (!rows.length) return res.status(404).json({ error: 'Budget not found' })
-    res.json(rows[0])
+
+    // 3. Call Claude
+    const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    const prompt = `You are a personal finance advisor analyzing a user's budget history.
+Today is ${today}.
+
+Here is their budget data with 3 months of actual spend history:
+${JSON.stringify(historyByBudget, null, 2)}
+
+Your task:
+1. For each budget, analyze the 3-month spending trend.
+2. Suggest a new monthly cap that is realistic but slightly disciplined.
+3. If spend is volatile, buffer a bit. If spend is consistently under cap, trim the cap.
+4. If avg_monthly_spend is 0 for all 3 months, the budget is unused — flag it.
+5. Round suggested caps to the nearest $5.
+6. Skip completed budgets.
+
+Respond ONLY with a valid JSON object (no markdown, no backticks, no preamble):
+{
+  "suggestions": [
+    {
+      "id": "<budget id>",
+      "name": "<budget name>",
+      "current_cap": <number>,
+      "suggested_cap": <number>,
+      "change": <suggested_cap minus current_cap>,
+      "reasoning": "<1-2 sentence explanation>",
+      "flag": null
+    }
+  ],
+  "summary": "<2-3 sentence overall narrative>"
+}
+
+Only include budgets where you have a meaningful suggestion (skip ones already optimal within $5).
+For unused budgets (all zeros), set flag to "unused" and keep current_cap as suggested_cap.`
+
+    const message = await _anthropic.messages.create({
+      model:      'claude-sonnet-4-6',
+      max_tokens: 2048,
+      messages:   [{ role: 'user', content: prompt }],
+    })
+
+    const raw = message.content[0]?.text || '{}'
+    let parsed
+    try {
+      parsed = JSON.parse(raw.replace(/```json|```/g, '').trim())
+    } catch {
+      return res.status(500).json({ error: 'Claude returned unparseable JSON.', raw_text: raw })
+    }
+
+    // Merge history months back into suggestions for frontend display
+    const suggestions = (parsed.suggestions || []).map(s => {
+      const hist = historyByBudget.find(b => String(b.id) === String(s.id))
+      return { ...s, months: hist?.months || [], avg_monthly_spend: hist?.avg_monthly_spend || 0 }
+    })
+
+    res.json({ suggestions, summary: parsed.summary || '' })
   } catch (err) {
     next(err)
   }
 })
 
-// ── Phase C: Budget Intelligence endpoints ────────────────────────────────────
-
-// GET /api/budgets/forecast — EOM prediction + per-budget pace
-router.get('/forecast', async (req, res, next) => {
-  try {
-    const data = await predictEndOfMonth(req.user.id)
-    res.json(data)
-  } catch (err) { next(err) }
-})
-
-// POST /api/budgets/pace-check — manually trigger pace alert check
-// (also runs from cron)
-router.post('/pace-check', async (req, res, next) => {
-  try {
-    const fired = await checkPaceAlerts(req.user.id)
-    res.json({ success: true, alerts_fired: fired })
-  } catch (err) { next(err) }
-})
-
-// POST /api/budgets/auto-complete — manually trigger auto-complete check
-// (also runs from cron)
-router.post('/auto-complete', async (req, res, next) => {
-  try {
-    const completed = await autoCompleteCategories(req.user.id)
-    res.json({ success: true, completed })
-  } catch (err) { next(err) }
-})
+module.exports = router
