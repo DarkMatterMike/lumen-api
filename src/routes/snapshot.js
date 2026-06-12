@@ -2,14 +2,19 @@
  * GET /api/snapshot
  *
  * Financial snapshot for Share with Claude.
- * Each query runs independently via safe() — one failure never
- * zeros out another section, and _errors reports what went wrong.
+ * Each query runs independently — one failure never zeros out another,
+ * and _errors reports exactly what went wrong.
+ *
+ * Monthly income/bill totals use monthlyAmount() which correctly
+ * expands biweekly items (×26/12 ≈ 2.167) instead of counting
+ * each recurring row only once.
  */
 
 const express     = require('express')
 const router      = express.Router()
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
+const { monthlyAmount } = require('../db/recurringUtils')
 
 router.use(requireAuth)
 
@@ -39,7 +44,6 @@ router.get('/', async (req, res, next) => {
     )
 
     // ── 2. Transactions — last 90 days ────────────────────────
-    // Uses name + cleaned_name (no merchant_name column in this schema)
     const transactions = await safe('transactions',
       `SELECT t.id, t.date, t.amount,
               COALESCE(t.cleaned_name, t.name) AS merchant_name,
@@ -79,7 +83,6 @@ router.get('/', async (req, res, next) => {
     }))
 
     // ── 4. Recurring / bills ──────────────────────────────────
-    // No category column — real cols: name, amount, day_of_month, type, icon, frequency
     const recurring = await safe('recurring',
       `SELECT id, name, amount, type, frequency, day_of_month, icon, active, start_date
        FROM recurring
@@ -99,10 +102,7 @@ router.get('/', async (req, res, next) => {
       [uid]
     )
 
-    // ── 6. Cash flow context ──────────────────────────────────
-    // paycheck_allocations table doesn't exist — derive from recurring instead
-    const paycheckItems = recurring.filter(r => r.type === 'income')
-
+    // ── 6. Liquid balance ─────────────────────────────────────
     const forecastAccounts = await safe('forecast_accounts',
       `SELECT balance FROM accounts
        WHERE user_id = $1
@@ -112,17 +112,18 @@ router.get('/', async (req, res, next) => {
     )
     const liquidBalance = forecastAccounts.reduce((s, a) => s + Number(a.balance), 0)
 
-    // ── Summaries ─────────────────────────────────────────────
-    const netWorth      = accounts.reduce((s, a) =>
+    // ── Summaries — use monthlyAmount() to correctly expand biweekly ──
+    // A biweekly paycheck of $X/occurrence = $X × 26/12 ≈ $2.167X per month
+    const netWorth       = accounts.reduce((s, a) =>
       a.is_debt ? s - Number(a.balance) : s + Number(a.balance), 0)
-    const totalBudgeted = budgets.reduce((s, b) => s + b.cap, 0)
-    const totalSpent    = budgets.reduce((s, b) => s + b.spent, 0)
-    const monthlyBills  = bills.reduce((s, b) => s + Number(b.amount), 0)
-    const monthlyIncome = incomeItems.reduce((s, i) => s + Number(i.amount), 0)
-    const totalDebt     = debtAccounts.reduce((s, d) => s + Number(d.balance), 0)
-    const totalMinimums = debtAccounts.reduce((s, d) => s + Number(d.minimum_payment || 0), 0)
+    const totalBudgeted  = budgets.reduce((s, b) => s + b.cap, 0)
+    const totalSpent     = budgets.reduce((s, b) => s + b.spent, 0)
+    const monthlyBills   = bills.reduce((s, b) => s + monthlyAmount(b), 0)
+    const monthlyIncome  = incomeItems.reduce((s, i) => s + monthlyAmount(i), 0)
+    const totalDebt      = debtAccounts.reduce((s, d) => s + Number(d.balance), 0)
+    const totalMinimums  = debtAccounts.reduce((s, d) => s + Number(d.minimum_payment || 0), 0)
 
-    // ── Assemble ──────────────────────────────────────────────
+    // ── Assemble snapshot ─────────────────────────────────────
     const snapshot = {
       generated_at: new Date().toISOString(),
       ...(Object.keys(errors).length && { _errors: errors }),
@@ -132,8 +133,10 @@ router.get('/', async (req, res, next) => {
         total_budgeted:   totalBudgeted,
         total_spent_mtd:  totalSpent,
         budget_remaining: totalBudgeted - totalSpent,
-        monthly_bills:    monthlyBills,
+        // These are true monthly equivalents — biweekly items counted ×2.167
         monthly_income:   monthlyIncome,
+        monthly_bills:    monthlyBills,
+        net_monthly:      monthlyIncome - monthlyBills - totalBudgeted,
         total_debt:       totalDebt,
         total_minimums:   totalMinimums,
         liquid_balance:   liquidBalance,
@@ -149,9 +152,10 @@ router.get('/', async (req, res, next) => {
         remaining:      totalBudgeted - totalSpent,
       },
 
+      // Raw recurring rows + per-item monthly equivalent for context
       bills_and_recurring: {
-        bills,
-        income: incomeItems,
+        bills: bills.map(b => ({ ...b, monthly_equivalent: monthlyAmount(b) })),
+        income: incomeItems.map(i => ({ ...i, monthly_equivalent: monthlyAmount(i) })),
       },
 
       debt: {
@@ -166,7 +170,6 @@ router.get('/', async (req, res, next) => {
         monthly_fixed_bills:   monthlyBills,
         monthly_discretionary: totalBudgeted,
         net_monthly:           monthlyIncome - monthlyBills - totalBudgeted,
-        income_sources:        paycheckItems,
       },
     }
 
