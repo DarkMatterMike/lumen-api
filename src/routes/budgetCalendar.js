@@ -19,9 +19,11 @@ async function ensureTable() {
       checked   JSONB    NOT NULL DEFAULT '{}',
       dates     JSONB    NOT NULL DEFAULT '{}',
       notes     JSONB    NOT NULL DEFAULT '{}',
+      data      JSONB    NOT NULL DEFAULT '{}',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
+  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}'`)
 }
 ensureTable().catch(e => console.warn('[BudgetCalendar] table init:', e.message))
 
@@ -29,24 +31,24 @@ ensureTable().catch(e => console.warn('[BudgetCalendar] table init:', e.message)
 router.get('/', async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT checked, dates, notes FROM budget_calendar_state WHERE user_id = $1',
+      'SELECT checked, dates, notes, data FROM budget_calendar_state WHERE user_id = $1',
       [req.user.id]
     )
-    const row = rows[0] || { checked: {}, dates: {}, notes: {} }
-    res.json({ checked: row.checked, dates: row.dates, notes: row.notes })
+    const row = rows[0] || { checked: {}, dates: {}, notes: {}, data: {} }
+    res.json({ checked: row.checked, dates: row.dates, notes: row.notes, data: row.data })
   } catch (err) { next(err) }
 })
 
 // POST — upsert state
 router.post('/', async (req, res, next) => {
   try {
-    const { checked = {}, dates = {}, notes = {} } = req.body
+    const { checked = {}, dates = {}, notes = {}, data = {} } = req.body
     await pool.query(`
-      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, updated_at)
-      VALUES ($1, $2, $3, $4, NOW())
+      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, data, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
       ON CONFLICT (user_id) DO UPDATE
-        SET checked = $2, dates = $3, notes = $4, updated_at = NOW()
-    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates), JSON.stringify(notes)])
+        SET checked = $2, dates = $3, notes = $4, data = $5, updated_at = NOW()
+    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates), JSON.stringify(notes), JSON.stringify(data)])
     res.json({ ok: true })
   } catch (err) { next(err) }
 })
@@ -55,9 +57,9 @@ router.post('/', async (req, res, next) => {
 router.delete('/', async (req, res, next) => {
   try {
     await pool.query(
-      `INSERT INTO budget_calendar_state (user_id, checked, dates, notes, updated_at)
-       VALUES ($1, '{}', '{}', '{}', NOW())
-       ON CONFLICT (user_id) DO UPDATE SET checked = '{}', dates = '{}', notes = '{}', updated_at = NOW()`,
+      `INSERT INTO budget_calendar_state (user_id, checked, dates, notes, data, updated_at)
+       VALUES ($1, '{}', '{}', '{}', '{}', NOW())
+       ON CONFLICT (user_id) DO UPDATE SET checked = '{}', dates = '{}', notes = '{}', data = '{}', updated_at = NOW()`,
       [req.user.id]
     )
     res.json({ ok: true })
