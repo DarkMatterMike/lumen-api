@@ -18,6 +18,7 @@ async function ensureTable() {
       user_id   INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       checked   JSONB    NOT NULL DEFAULT '{}',
       dates     JSONB    NOT NULL DEFAULT '{}',
+      notes     JSONB    NOT NULL DEFAULT '{}',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
@@ -28,24 +29,24 @@ ensureTable().catch(e => console.warn('[BudgetCalendar] table init:', e.message)
 router.get('/', async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT checked, dates FROM budget_calendar_state WHERE user_id = $1',
+      'SELECT checked, dates, notes FROM budget_calendar_state WHERE user_id = $1',
       [req.user.id]
     )
-    const row = rows[0] || { checked: {}, dates: {} }
-    res.json({ checked: row.checked, dates: row.dates })
+    const row = rows[0] || { checked: {}, dates: {}, notes: {} }
+    res.json({ checked: row.checked, dates: row.dates, notes: row.notes })
   } catch (err) { next(err) }
 })
 
 // POST — upsert state
 router.post('/', async (req, res, next) => {
   try {
-    const { checked = {}, dates = {} } = req.body
+    const { checked = {}, dates = {}, notes = {} } = req.body
     await pool.query(`
-      INSERT INTO budget_calendar_state (user_id, checked, dates, updated_at)
-      VALUES ($1, $2, $3, NOW())
+      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
       ON CONFLICT (user_id) DO UPDATE
-        SET checked = $2, dates = $3, updated_at = NOW()
-    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates)])
+        SET checked = $2, dates = $3, notes = $4, updated_at = NOW()
+    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates), JSON.stringify(notes)])
     res.json({ ok: true })
   } catch (err) { next(err) }
 })
@@ -54,9 +55,9 @@ router.post('/', async (req, res, next) => {
 router.delete('/', async (req, res, next) => {
   try {
     await pool.query(
-      `INSERT INTO budget_calendar_state (user_id, checked, dates, updated_at)
-       VALUES ($1, '{}', '{}', NOW())
-       ON CONFLICT (user_id) DO UPDATE SET checked = '{}', dates = '{}', updated_at = NOW()`,
+      `INSERT INTO budget_calendar_state (user_id, checked, dates, notes, updated_at)
+       VALUES ($1, '{}', '{}', '{}', NOW())
+       ON CONFLICT (user_id) DO UPDATE SET checked = '{}', dates = '{}', notes = '{}', updated_at = NOW()`,
       [req.user.id]
     )
     res.json({ ok: true })
