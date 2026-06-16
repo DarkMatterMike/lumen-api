@@ -56,15 +56,27 @@ router.get('/', async (req, res, next) => {
       return res.json({ checked: {}, dates: {}, notes: {}, tx: {}, planVersion: CURRENT_PLAN_VERSION, fresh: true })
     }
 
-    // Saved state is from an older plan — wipe it and return fresh
+    // Version mismatch — migrate old checked/notes/dates into tx, keep data intact
     if (row.plan_version !== CURRENT_PLAN_VERSION) {
+      // Build tx from old checked/notes/dates so nothing is lost
+      const migratedTx = { ...(row.tx || {}) }
+      for (const [id, isDone] of Object.entries(row.checked || {})) {
+        if (isDone) migratedTx[id] = { ...(migratedTx[id] || {}), done: true }
+      }
+      for (const [id, note] of Object.entries(row.notes || {})) {
+        if (note) migratedTx[id] = { ...(migratedTx[id] || {}), note }
+      }
+      for (const [id, date] of Object.entries(row.dates || {})) {
+        if (date) migratedTx[id] = { ...(migratedTx[id] || {}), date }
+      }
+      // Save migrated state with new plan version
       await pool.query(
         `UPDATE budget_calendar_state
-         SET checked='{}', dates='{}', notes='{}', plan_version=$1, updated_at=NOW()
-         WHERE user_id=$2`,
-        [CURRENT_PLAN_VERSION, req.user.id]
+         SET checked='{}', dates='{}', notes='{}', tx=$1, plan_version=$2, updated_at=NOW()
+         WHERE user_id=$3`,
+        [JSON.stringify(migratedTx), CURRENT_PLAN_VERSION, req.user.id]
       )
-      return res.json({ checked: {}, dates: {}, notes: {}, tx: {}, planVersion: CURRENT_PLAN_VERSION, reset: true })
+      return res.json({ checked: {}, dates: {}, notes: {}, tx: migratedTx, planVersion: CURRENT_PLAN_VERSION, migrated: true })
     }
 
     res.json({
