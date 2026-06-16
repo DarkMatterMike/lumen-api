@@ -23,7 +23,14 @@ async function ensureTable() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
+  // If the table existed from an older deploy, CREATE TABLE IF NOT EXISTS will not add missing columns.
+  // Add every expected column defensively so older schemas migrate safely.
+  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS checked JSONB NOT NULL DEFAULT '{}'`)
+  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS dates JSONB NOT NULL DEFAULT '{}'`)
+  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS notes JSONB NOT NULL DEFAULT '{}'`)
   await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}'`)
+  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
+
 }
 ensureTable().catch(e => console.warn('[BudgetCalendar] table init:', e.message))
 
