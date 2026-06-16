@@ -24,6 +24,7 @@ async function ensureTable() {
       checked      JSONB        NOT NULL DEFAULT '{}',
       dates        JSONB        NOT NULL DEFAULT '{}',
       notes        JSONB        NOT NULL DEFAULT '{}',
+      tx           JSONB        NOT NULL DEFAULT '{}',
       plan_version TEXT         NOT NULL DEFAULT '',
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -33,6 +34,10 @@ async function ensureTable() {
     ALTER TABLE budget_calendar_state
     ADD COLUMN IF NOT EXISTS plan_version TEXT NOT NULL DEFAULT ''
   `).catch(() => {})
+  await pool.query(`
+    ALTER TABLE budget_calendar_state
+    ADD COLUMN IF NOT EXISTS tx JSONB NOT NULL DEFAULT '{}'
+  `).catch(() => {})
 }
 ensureTable().catch(e => console.warn('[BudgetCalendar] table init:', e.message))
 
@@ -41,14 +46,14 @@ ensureTable().catch(e => console.warn('[BudgetCalendar] table init:', e.message)
 router.get('/', async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT checked, dates, notes, plan_version FROM budget_calendar_state WHERE user_id = $1',
+      'SELECT checked, dates, notes, tx, plan_version FROM budget_calendar_state WHERE user_id = $1',
       [req.user.id]
     )
     const row = rows[0]
 
     // No saved state yet — fresh start
     if (!row) {
-      return res.json({ checked: {}, dates: {}, notes: {}, planVersion: CURRENT_PLAN_VERSION, fresh: true })
+      return res.json({ checked: {}, dates: {}, notes: {}, tx: {}, planVersion: CURRENT_PLAN_VERSION, fresh: true })
     }
 
     // Saved state is from an older plan — wipe it and return fresh
@@ -59,13 +64,14 @@ router.get('/', async (req, res, next) => {
          WHERE user_id=$2`,
         [CURRENT_PLAN_VERSION, req.user.id]
       )
-      return res.json({ checked: {}, dates: {}, notes: {}, planVersion: CURRENT_PLAN_VERSION, reset: true })
+      return res.json({ checked: {}, dates: {}, notes: {}, tx: {}, planVersion: CURRENT_PLAN_VERSION, reset: true })
     }
 
     res.json({
       checked:     row.checked,
       dates:       row.dates,
       notes:       row.notes,
+      tx:          row.tx || {},
       planVersion: row.plan_version,
     })
   } catch (err) { next(err) }
@@ -74,15 +80,15 @@ router.get('/', async (req, res, next) => {
 // POST — upsert state
 router.post('/', async (req, res, next) => {
   try {
-    const { checked = {}, dates = {}, notes = {}, planVersion } = req.body
+    const { checked = {}, dates = {}, notes = {}, tx = {}, planVersion } = req.body
     // Only save if client is on the current plan version
     const version = planVersion === CURRENT_PLAN_VERSION ? planVersion : CURRENT_PLAN_VERSION
     await pool.query(`
-      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, plan_version, updated_at)
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, tx, plan_version, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
       ON CONFLICT (user_id) DO UPDATE
-        SET checked=$2, dates=$3, notes=$4, plan_version=$5, updated_at=NOW()
-    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates), JSON.stringify(notes), version])
+        SET checked=$2, dates=$3, notes=$4, tx=$5, plan_version=$6, updated_at=NOW()
+    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates), JSON.stringify(notes), JSON.stringify(tx), version])
     res.json({ ok: true })
   } catch (err) { next(err) }
 })
