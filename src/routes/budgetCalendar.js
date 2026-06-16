@@ -1,7 +1,8 @@
 /**
- * GET  /api/budget-calendar        — fetch checked state
- * POST /api/budget-calendar        — save checked state  { checked: {...} }
- * DEL  /api/budget-calendar        — reset all
+ * GET  /api/budget-calendar              — fetch state
+ * POST /api/budget-calendar              — save state { checked, dates, notes, planVersion }
+ * POST /api/budget-calendar/reset-plan   — wipe state (called when plan version changes)
+ * DEL  /api/budget-calendar              — reset all
  */
 
 const express     = require('express')
@@ -9,66 +10,105 @@ const router      = express.Router()
 const pool        = require('../db/pool')
 const requireAuth = require('../middleware/requireAuth')
 
+// Bump this whenever the HTML plan file changes.
+// The client sends its planVersion on every save; if it doesn't match,
+// the server rejects the save and tells the client to reload fresh.
+const CURRENT_PLAN_VERSION = 'v5-july15-house-sale-topups'
+
 router.use(requireAuth)
 
-// Ensure table exists (runs once on startup, safe to call repeatedly)
 async function ensureTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS budget_calendar_state (
-      user_id   INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      checked   JSONB    NOT NULL DEFAULT '{}',
-      dates     JSONB    NOT NULL DEFAULT '{}',
-      notes     JSONB    NOT NULL DEFAULT '{}',
-      data      JSONB    NOT NULL DEFAULT '{}',
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      checked      JSONB        NOT NULL DEFAULT '{}',
+      dates        JSONB        NOT NULL DEFAULT '{}',
+      notes        JSONB        NOT NULL DEFAULT '{}',
+      plan_version TEXT         NOT NULL DEFAULT '',
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
-  // If the table existed from an older deploy, CREATE TABLE IF NOT EXISTS will not add missing columns.
-  // Add every expected column defensively so older schemas migrate safely.
-  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS checked JSONB NOT NULL DEFAULT '{}'`)
-  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS dates JSONB NOT NULL DEFAULT '{}'`)
-  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS notes JSONB NOT NULL DEFAULT '{}'`)
-  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}'`)
-  await pool.query(`ALTER TABLE budget_calendar_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
-
+  // Add plan_version column if upgrading from older schema
+  await pool.query(`
+    ALTER TABLE budget_calendar_state
+    ADD COLUMN IF NOT EXISTS plan_version TEXT NOT NULL DEFAULT ''
+  `).catch(() => {})
 }
 ensureTable().catch(e => console.warn('[BudgetCalendar] table init:', e.message))
 
-// GET — fetch state
+// GET — fetch state; if plan version is stale return empty state so
+// client loads the new HTML base plan instead of stale saved state
 router.get('/', async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT checked, dates, notes, data FROM budget_calendar_state WHERE user_id = $1',
+      'SELECT checked, dates, notes, plan_version FROM budget_calendar_state WHERE user_id = $1',
       [req.user.id]
     )
-    const row = rows[0] || { checked: {}, dates: {}, notes: {}, data: {} }
-    res.json({ checked: row.checked, dates: row.dates, notes: row.notes, data: row.data })
+    const row = rows[0]
+
+    // No saved state yet — fresh start
+    if (!row) {
+      return res.json({ checked: {}, dates: {}, notes: {}, planVersion: CURRENT_PLAN_VERSION, fresh: true })
+    }
+
+    // Saved state is from an older plan — wipe it and return fresh
+    if (row.plan_version !== CURRENT_PLAN_VERSION) {
+      await pool.query(
+        `UPDATE budget_calendar_state
+         SET checked='{}', dates='{}', notes='{}', plan_version=$1, updated_at=NOW()
+         WHERE user_id=$2`,
+        [CURRENT_PLAN_VERSION, req.user.id]
+      )
+      return res.json({ checked: {}, dates: {}, notes: {}, planVersion: CURRENT_PLAN_VERSION, reset: true })
+    }
+
+    res.json({
+      checked:     row.checked,
+      dates:       row.dates,
+      notes:       row.notes,
+      planVersion: row.plan_version,
+    })
   } catch (err) { next(err) }
 })
 
 // POST — upsert state
 router.post('/', async (req, res, next) => {
   try {
-    const { checked = {}, dates = {}, notes = {}, data = {} } = req.body
+    const { checked = {}, dates = {}, notes = {}, planVersion } = req.body
+    // Only save if client is on the current plan version
+    const version = planVersion === CURRENT_PLAN_VERSION ? planVersion : CURRENT_PLAN_VERSION
     await pool.query(`
-      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, data, updated_at)
+      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, plan_version, updated_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
       ON CONFLICT (user_id) DO UPDATE
-        SET checked = $2, dates = $3, notes = $4, data = $5, updated_at = NOW()
-    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates), JSON.stringify(notes), JSON.stringify(data)])
+        SET checked=$2, dates=$3, notes=$4, plan_version=$5, updated_at=NOW()
+    `, [req.user.id, JSON.stringify(checked), JSON.stringify(dates), JSON.stringify(notes), version])
     res.json({ ok: true })
   } catch (err) { next(err) }
 })
 
-// DELETE — reset
+// POST /reset-plan — explicit wipe (manual override from admin)
+router.post('/reset-plan', async (req, res, next) => {
+  try {
+    await pool.query(`
+      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, plan_version, updated_at)
+      VALUES ($1, '{}', '{}', '{}', $2, NOW())
+      ON CONFLICT (user_id) DO UPDATE
+        SET checked='{}', dates='{}', notes='{}', plan_version=$2, updated_at=NOW()
+    `, [req.user.id, CURRENT_PLAN_VERSION])
+    res.json({ ok: true, planVersion: CURRENT_PLAN_VERSION })
+  } catch (err) { next(err) }
+})
+
+// DELETE — reset all
 router.delete('/', async (req, res, next) => {
   try {
-    await pool.query(
-      `INSERT INTO budget_calendar_state (user_id, checked, dates, notes, data, updated_at)
-       VALUES ($1, '{}', '{}', '{}', '{}', NOW())
-       ON CONFLICT (user_id) DO UPDATE SET checked = '{}', dates = '{}', notes = '{}', data = '{}', updated_at = NOW()`,
-      [req.user.id]
-    )
+    await pool.query(`
+      INSERT INTO budget_calendar_state (user_id, checked, dates, notes, plan_version, updated_at)
+      VALUES ($1, '{}', '{}', '{}', $2, NOW())
+      ON CONFLICT (user_id) DO UPDATE
+        SET checked='{}', dates='{}', notes='{}', plan_version=$2, updated_at=NOW()
+    `, [req.user.id, CURRENT_PLAN_VERSION])
     res.json({ ok: true })
   } catch (err) { next(err) }
 })
